@@ -74,6 +74,7 @@ footer { color: var(--muted); font-size: .85rem; }
   </div>
   <nav aria-label="Versions">
     <a href="#compare">At a glance</a>
+    <a href="#v030">v0.3.0 · transformer parser</a>
     <a href="#v020">v0.2.0 · own parser</a>
     <a href="#v010w">v0.1.0 + sense model</a>
     <a href="#v010">v0.1.0 · prototype</a>
@@ -84,20 +85,100 @@ footer { color: var(--muted); font-size: .85rem; }
 <section id="compare" class="version">
   <div class="vhead"><h2>At a glance</h2></div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Measure</th><th>v0.1.0 prototype</th><th>v0.1.0 + sense model</th><th>v0.2.0 current</th></tr></thead>
+    <thead><tr><th>Measure</th><th>v0.1.0 prototype</th><th>v0.1.0 + sense model</th><th>v0.2.0</th><th>v0.3.0 current</th></tr></thead>
     <tbody>
-      <tr><td>English parser</td><td>spaCy <code>en_core_web_md</code> (CNN)</td><td>same</td><td class="win">UGL's own BiLSTM + biaffine, numpy</td></tr>
-      <tr><td>Parser accuracy (EWT test, labelled attachment)</td><td class="num">not measured on UD</td><td class="num">same</td><td class="num win">86.3%</td></tr>
-      <tr><td>Meaning layer</td><td>~40 rules writing UGL directly</td><td>same</td><td class="win">analyze → IR → coref → serialize</td></tr>
-      <tr><td>Word-sense choice</td><td class="num">most frequent sense, 66.8%</td><td class="num win">BERT centroids, 73.5%</td><td class="num">73.5% local / 66.8% browser</td></tr>
-      <tr><td>Token ids per English word</td><td class="num">3.13</td><td class="num">3.13</td><td class="num win">1.96</td></tr>
-      <tr><td>Proper names</td><td>spelled letter by letter</td><td>same</td><td class="win">7,597 frequent names numbered</td></tr>
-      <tr><td>"John and Mary met"</td><td>split into two clauses</td><td>same</td><td class="win">one group</td></tr>
-      <tr><td>Crashes on 1,500 hand-annotated trees</td><td class="num">n/a</td><td class="num">n/a</td><td class="num win">0</td></tr>
-      <tr><td>Runs in the browser</td><td>no (spaCy has no WebAssembly build)</td><td>no</td><td class="win">yes, live in Pyodide</td></tr>
-      <tr><td>Install needs</td><td>spaCy + 45 MB model</td><td>+ PyTorch, transformers, BERT 440 MB</td><td class="win">numpy + lemminflect</td></tr>
+      <tr><td>English parser</td><td>spaCy <code>en_core_web_md</code> (CNN)</td><td>same</td><td>UGL's own BiLSTM + biaffine, numpy</td><td class="win">fine-tuned ELECTRA-small transformer + biaffine, numpy</td></tr>
+      <tr><td>Parser accuracy (EWT test, labelled attachment)</td><td class="num">not measured on UD</td><td class="num">same</td><td class="num">86.3%</td><td class="num win">91.1%</td></tr>
+      <tr><td>UGL from predicted vs hand-annotated trees (exact)</td><td class="num">n/a</td><td class="num">n/a</td><td class="num">44.9%</td><td class="num win">56.2%</td></tr>
+      <tr><td>Meaning layer</td><td>~40 rules writing UGL directly</td><td>same</td><td>analyze → IR → coref → serialize</td><td class="win">+ semi-modals, sentence splitting, quality flags</td></tr>
+      <tr><td>Word-sense choice</td><td class="num">most frequent sense, 66.8%</td><td class="num win">BERT centroids, 73.5%</td><td class="num">73.5% local / 66.8% browser</td><td class="num">66.8% everywhere (joint sense head in training)</td></tr>
+      <tr><td>Token ids per English word</td><td class="num">3.13</td><td class="num">3.13</td><td class="num">1.96</td><td class="num">1.96</td></tr>
+      <tr><td>Proper names</td><td>spelled letter by letter</td><td>same</td><td>7,597 frequent names numbered</td><td>same</td></tr>
+      <tr><td>"John and Mary met"</td><td>split into two clauses</td><td>same</td><td class="win">one group</td><td>one group</td></tr>
+      <tr><td>Crashes on 1,500 hand-annotated trees</td><td class="num">n/a</td><td class="num">n/a</td><td class="num">0</td><td class="num">0</td></tr>
+      <tr><td>Knows when it may be wrong</td><td>no</td><td>no</td><td>no</td><td class="win">yes: per-sentence flags</td></tr>
+      <tr><td>Runs in the browser</td><td>no (spaCy has no WebAssembly build)</td><td>no</td><td>yes, live in Pyodide</td><td>yes</td></tr>
+      <tr><td>Install needs</td><td>spaCy + 45 MB model</td><td>+ PyTorch, transformers, BERT 440 MB</td><td>numpy + lemminflect</td><td>numpy + lemminflect</td></tr>
     </tbody>
   </table></div>
+</section>
+
+<section id="v030" class="version">
+  <div class="vhead"><h2>v0.3.0 · transformer parser</h2><span class="tag">library 0.3.0</span><span class="tag">dictionary 0.5.0</span><span class="tag">tokenizer scheme 2</span></div>
+  <p>The parser reads each sentence with a small pretrained transformer instead of a BiLSTM, an exact projective decoder builds the tree, and two new rule passes simplify the meaning graph and flag anything the encoder is unsure of. Everything still runs on numpy, in the browser too.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart TD
+  A[English text] --> B[Strip asides<br>regex]
+  B --> C[Sentence splitter + UD tokenizer<br>regex, clitic rules]
+  C --> W[WordPiece<br>pure Python, BERT vocabulary]
+  W --> D[ELECTRA-small transformer<br>12 layers x 256, fine-tuned<br>learned layer mix per word]
+  D --> D2[Taggers + biaffine arcs and labels]
+  D2 --> E[Tree decoding<br>Eisner: best projective tree, one root]
+  E --> F[Lemmatizer<br>lemminflect]
+  F --> R[Restructure<br>semi-modals -> auxiliaries]
+  R --> G[Analyzer<br>UD tree -> Event / Entity graph]
+  G --> H[Coreference<br>salience, surface subject, groups]
+  H --> S[Simplify<br>split and-clauses and comma asides]
+  S --> I[Sense choice<br>most frequent sense]
+  I --> J[Serializer<br>graph -> UGL tokens]
+  K[(Dictionary 0.5.0<br>headword per sense)] --> I
+  K --> J
+  D2 -. head probabilities .-> Q[Quality flags<br>uncertain parse, unknown word,<br>unresolved pronoun, dropped word]
+  G -.-> Q
+  H -.-> Q
+  J --> L[UGL text + flags]
+  L --> M[Tokenizer scheme 2] --> N[Token ids]
+  L --> O[Decoder<br>recursive descent + realiser] --> P[English back-translation]
+  L --> T[Readable tree<br>humanize + decoder's scope matching]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class D,D2 neural
+  class W,E,H,M,O,I algo
+  class B,C,F,R,G,S,J,Q,T rules
+  class A,K,L,N,P data
+</pre></div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Kind</th><th>What it is</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>WordPiece</td><td class="kind algo">Algorithm</td><td>Splits words into the transformer's sub-word pieces</td><td>BERT basic tokenizer + greedy longest-match WordPiece, re-implemented in pure Python so it runs in Pyodide; identical to the Hugging Face tokenizer on all 6,674 sampled treebank sentences</td></tr>
+      <tr><td>Transformer encoder</td><td class="kind neural">Neural net</td><td>Reads the whole sentence at once; each word sees every other word</td><td>ELECTRA-small discriminator (14M parameters: 12 self-attention layers, 256 dims, 4 heads), fine-tuned for parsing. A word's vector is a learned weighted mix of all 13 layer outputs at its first piece. Numpy implementation (attention, exact GELU, layer norm) matches PyTorch to 6e-6.</td></tr>
+      <tr><td>Taggers + arcs + labels</td><td class="kind neural">Neural net</td><td>Part of speech, head word and relation for every word</td><td>Same heads as v0.2.0: linear UPOS / Penn / feature taggers, biaffine arc scorer (MLP 400), biaffine label scorer (MLP 100). Trained 20 epochs on 5 UD English treebanks on an RTX 4060 (~25 min). Weights 27 MB in float16.</td></tr>
+      <tr><td>Tree decoding</td><td class="kind algo">Algorithm</td><td>Best tree whose arcs never cross</td><td>Eisner's O(n³) dynamic program with one root; checked equal to brute force on 200 random cases. English trees are projective, so crossing arcs (like "because" attaching across "mother") are ruled out by construction.</td></tr>
+      <tr><td>Restructure</td><td class="kind rules">Rules</td><td>Gives each meaning one tree shape</td><td>"have to / have got to / be able to / be going to / be supposed to" are rewritten into auxiliaries like "must", so they get the modal letter (have to = <code>u</code>) instead of a verb</td></tr>
+      <tr><td>Simplify</td><td class="kind rules">Rules</td><td>Splits long sentences into simpler ones with the same meaning</td><td>Top-level "and" clauses and comma-set-off asides (non-restrictive relative clauses, appositions, participial phrases) become their own sentences; restrictive clauses, but / or / if / because links, and questions stay whole</td></tr>
+      <tr><td>Quality flags</td><td class="kind rules">Rules</td><td>Says what may be wrong with each sentence</td><td>Flags heads the parser is under 60% sure of (except inside names), pronouns with nothing to refer to, words not in the dictionary, words the parser left unattached, unknown prepositions. <code>tools/build_corpus.py</code> keeps only clean sentences for training data (46% of a Wikipedia sample today).</td></tr>
+      <tr><td>Readable tree</td><td class="kind rules">Rules</td><td>The playground's indented view</td><td>Each scope opens a block and its closing tags close it; which tag closes which word is recorded by the decoder's own parser, so the tree always matches how the line is read</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>What changed from v0.2.0, and why</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th>Why</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>BiLSTM → fine-tuned transformer</td><td>Long sentences with many relations were misparsed; a BiLSTM sees the sentence one word at a time</td><td>LAS 86.4 → 91.1 (about a third fewer errors); exact UGL match with gold-tree output 44.9% → 56.2%; weights 31 → 27 MB</td></tr>
+      <tr><td>Chu-Liu/Edmonds → Eisner</td><td>CLE allowed crossing arcs, which English does not have</td><td>+0.2 LAS; no crossing-arc trees</td></tr>
+      <tr><td>Semi-modals as auxiliaries</td><td>"I have to get that" was encoded with the verb hold</td><td>"have to" = must (<code>u</code>), "be able to" = can (<code>c</code>)</td></tr>
+      <tr><td>Simplify pass</td><td>Long sentences produced deeply nested lines</td><td>Separate statements become separate lines</td></tr>
+      <tr><td>Bug families fixed</td><td>Reported from the playground; each is a family, fixed in one place with regression tests</td><td>Unmarked participles join with "and" (no invented "when"); "like to eat and run" stays an infinitive; both / all / most refer back; "tens of km" and "two hundred thousand" are numbers</td></tr>
+      <tr><td>Passive salience, one sense per entity</td><td>"it" after a passive picked the agent; re-mentions re-chose senses out of context</td><td>"The bridge was destroyed by the flood ... rebuilt it" = the bridge</td></tr>
+      <tr><td>Dictionary 0.5.0</td><td>Concepts were shown with their spelling's overall most common word ("car" read as "machine")</td><td>Headword = spelling most used in that sense; numbering identical to 0.4.0</td></tr>
+      <tr><td>Quality flags + clean corpus builder</td><td>Garbage in, garbage out: training data needs to exclude doubtful encodings</td><td>Each line carries its issues; the corpus keeps only clean ones</td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid2">
+    <div class="note"><h3>Not shipped yet</h3><ul class="tight">
+      <li>Sense choice from the parser's own layers: the fine-tuned layers lost word-meaning information (≤ 66.8%, no better than most-frequent-sense).</li>
+      <li>In training: a sense head trained jointly with the parser that compares the word in context with each candidate sense's dictionary gloss.</li>
+    </ul></div>
+    <div class="note"><h3>Known gaps</h3><ul class="tight">
+      <li>Mass nouns get "a" when decoding ("a food").</li>
+      <li>Some headwords are abbreviations ("km").</li>
+      <li>Uncertain parses are the biggest reason sentences are flagged (38% of a Wikipedia sample).</li>
+    </ul></div>
+  </div>
 </section>
 
 <section id="v020" class="version">
