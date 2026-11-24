@@ -1,4 +1,4 @@
-"""UGL - a universal grammatical language: English <-> numbered-concept notation.
+﻿"""UGL - a universal grammatical language: English <-> numbered-concept notation.
 
     import ugl
     ugl.encode("At nine, I ate the apple.")   # ['#9 v20 n1 v444p n2344t \\v20']
@@ -20,6 +20,9 @@ class UGL:
     The spaCy model is only loaded the first time you encode English."""
 
     def __init__(self, dictionary=None, wsd=True):
+        """wsd: True = contextual sense model if installed, False = most
+        frequent sense, or a path to a centroid file."""
+        self.wsd = None
         self.lexicon = Lexicon(dictionary)
         self.decoder = Decoder(self.lexicon)
         self.tokenizer = Tokenizer(self.lexicon)
@@ -32,8 +35,7 @@ class UGL:
             from .encoder import Encoder
             self._encoder = Encoder(self.lexicon)
             if self._want_wsd:
-                from . import wsd
-                wsd.attach(self.lexicon, self._encoder.nlp)
+                self.wsd = _attach_context_wsd(self.lexicon, self._want_wsd)
         return self._encoder
 
     @property
@@ -58,6 +60,24 @@ class UGL:
 
 
 _default = None
+
+
+def _attach_context_wsd(lexicon, want):
+    """Use the contextual sense model if its centroid file and torch are
+    available; otherwise keep most-frequent-sense (always works)."""
+    import os
+    from .wsd_context import DEFAULT_PATH
+    path = want if isinstance(want, str) else DEFAULT_PATH
+    if not os.path.exists(path):
+        return None
+    try:
+        from .wsd_context import attach
+        return attach(lexicon, path, prior_weight=CONTEXT_PRIOR_WEIGHT)
+    except ImportError:
+        return None
+
+
+CONTEXT_PRIOR_WEIGHT = 0.2
 
 
 def load(dictionary=None, wsd=True):

@@ -1,4 +1,4 @@
-"""Runtime dictionary: English word sense <-> UGL token(s).
+﻿"""Runtime dictionary: English word sense <-> UGL token(s).
 
 A dictionary is one self-contained JSON file (optionally gzipped), see
 DICTIONARY_FORMAT.md.  The frozen default ships inside the package in
@@ -82,17 +82,8 @@ class Lexicon:
             r = self.wsd.choose(lemma, cands, sent)
             if r:
                 return r
-        if not context:
-            return cands[0]
-        # fallback: most-frequent-sense prior plus gloss overlap (simplified Lesk)
-        ctx = set(context)
-        best, best_score = None, -1.0
-        for rank, s in enumerate(cands):
-            gloss = set(w.lower().strip(".,;()") for w in self.gloss(s).split())
-            score = (1 + len(gloss & ctx)) / (rank + 1)
-            if score > best_score:
-                best, best_score = s, score
-        return best
+        # fallback: most frequent sense (index order)
+        return cands[0]
 
     def encode_word(self, lemma, cls, mods="", context=(), sent=None):
         """List of UGL tokens for a word (mods go on the head token), or None."""

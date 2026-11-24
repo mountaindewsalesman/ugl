@@ -1,4 +1,4 @@
-"""Evaluate sense choice on SemCor (hand-annotated WordNet senses).
+﻿"""Evaluate sense choice on SemCor (hand-annotated WordNet senses).
 
     python tools/eval_wsd.py --sents 400
 
@@ -52,12 +52,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sents", type=int, default=400)
     ap.add_argument("--offset", type=int, default=20000)
+    ap.add_argument("--context", default=None, help="path to bert-semcor.npz: evaluate the contextual model")
     a = ap.parse_args()
     nltk.download("semcor", quiet=True)
     nlp = spacy.load("en_core_web_md")
     lex = Lexicon()
-    weights = [0, 1, 2, 4, 6, 8, 12]
-    models = {w: VectorWSD(lex, nlp, weight=w) for w in weights}
+    if a.context:
+        from ugl.wsd_context import ContextWSD
+        base = ContextWSD(lex, a.context)
+        weights = [0.0, 0.02, 0.05, 0.1, 0.2, 99.0]   # 99 = pure most-frequent-sense
+        models = {w: ContextWSD(lex, a.context, prior_weight=w, embedder=base.emb) for w in weights}
+        for m in models.values():
+            m._gloss = base._gloss
+    else:
+        weights = [0, 1, 2, 4, 6, 8, 12]
+        models = {w: VectorWSD(lex, nlp, weight=w) for w in weights}
     hits = {w: [0, 0] for w in weights}
     n = 0
     for words, targets in items(a.sents, a.offset):
@@ -73,7 +82,7 @@ def main():
                 hits[w][0] += pick == gold
                 hits[w][1] += lex.senses_[pick]["tokens"] == gold_t
     print(f"{n} ambiguous words from {a.sents} SemCor sentences")
-    print("weight  sense-acc  token-acc   (weight 0 = most frequent sense)")
+    print("weight  sense-acc  token-acc   (" + ("prior weight; 99 = most frequent sense" if a.context else "weight 0 = most frequent sense") + ")")
     for w in weights:
         print(f"{w:6}  {hits[w][0]/n:9.3f}  {hits[w][1]/n:9.3f}")
 
