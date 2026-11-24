@@ -1,7 +1,7 @@
 """Build a UGL training corpus from English text, keeping only sentences the
 encoder has no doubts about.
 
-    python tools/build_corpus.py data/raw/*.txt --out corpus/ --max-sents 50000
+    python tools/build_corpus.py data/raw/*.jsonl --out corpus/ --max-sents 50000
 
 Writes:
     corpus/ugl.txt        one clean UGL line per line (training data)
@@ -23,11 +23,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import ugl  # noqa: E402
+from ugl.corpus import documents, paragraphs  # noqa: E402
 
 KIND = [("uncertain grammar", "uncertain parse"), ("refers to nothing", "unresolved pronoun"),
         ("not in the dictionary", "unknown word"), ("no clear grammatical role", "unattached word"),
-        ("was dropped", "dropped content word"),
-        ("not in the relation table", "unknown preposition"), ("failed", "crash")]
+        ("was dropped", "dropped content word"), ("round trip", "round trip unstable"),
+        ("not in the relation table", "unknown preposition"), ("does not parse back", "undecodable"),
+        ("failed", "crash")]
 
 
 def kind(issue):
@@ -39,40 +41,45 @@ def main():
     ap.add_argument("files", nargs="+")
     ap.add_argument("--out", default="corpus")
     ap.add_argument("--max-sents", type=int, default=None)
+    ap.add_argument("--min-confidence", type=float, default=0.9,
+                    help="calibrated head probability every word needs (see tools/calibrate_parser.py)")
+    ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
     ap.add_argument("--allow", nargs="*", default=[], help="issue kinds to tolerate, e.g. 'unknown word'")
     a = ap.parse_args()
     u = ugl.UGL()
+    u.encoder.unsure = a.min_confidence
     os.makedirs(a.out, exist_ok=True)
     fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8")
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")
     fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8")
     kept = seen = 0
     why = collections.Counter()
-    for path in a.files:
-        with open(path, encoding="utf-8") as f:
-            for para in f:
-                para = para.strip()
-                if len(para) < 40:
-                    continue
-                # one paragraph at a time: pronouns can refer back within it
-                by_src = collections.OrderedDict()
-                for line in u.encode_lines(para):
-                    by_src.setdefault(line.source, []).append(line)
-                for src, lines in by_src.items():
-                    seen += 1
-                    issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
-                    if issues:
-                        why.update({kind(i) for i in issues})
-                        fr.write(src.replace("\t", " ") + "\t" + " | ".join(issues) + "\n")
-                    else:
-                        kept += 1
-                        fu.write("\n".join(l.ugl for l in lines) + "\n")
-                        fe.write(re.sub(r"\s+", " ", src) + "\n")
-                    if a.max_sents and seen >= a.max_sents:
-                        break
-                if a.max_sents and seen >= a.max_sents:
+    def full():
+        return a.max_sents and seen >= a.max_sents
+
+    for title, text in documents(a.files):
+        for para in paragraphs(text):
+            if len(para) < 40:
+                continue
+            # one paragraph at a time: pronouns refer back within it, or to the title
+            by_src = collections.OrderedDict()
+            for line in u.encode_lines(para, topic=title, roundtrip=not a.no_roundtrip):
+                by_src.setdefault(line.source, []).append(line)
+            for src, lines in by_src.items():
+                seen += 1
+                issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
+                if issues:
+                    why.update({kind(i) for i in issues})
+                    fr.write(src.replace("\t", " ") + "\t" + " | ".join(issues) + "\n")
+                else:
+                    kept += 1
+                    fu.write("\n".join(l.ugl for l in lines) + "\n")
+                    fe.write(re.sub(r"\s+", " ", src) + "\n")
+                if full():
                     break
-        if a.max_sents and seen >= a.max_sents:
+            if full():
+                break
+        if full():
             break
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected")
     for k, n in why.most_common():

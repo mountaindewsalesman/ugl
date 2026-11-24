@@ -30,9 +30,7 @@ def positions(ev, out=None):
                 out.add(a.pos)
         for m in e.members:
             ent(m)
-        ent(e.possessor)
-        if e.ref is not None:
-            ent(e.ref)
+        ent(e.possessor)            # (a re-mention's antecedent is said elsewhere: not followed)
         for r in e.restrictors:
             event(r)
 

@@ -88,6 +88,7 @@ def encode(text):
     lines = U.encode_lines(text)
     return json.dumps({"ugl": [l.ugl for l in lines], "sources": [l.source for l in lines],
                        "issues": [list(l.issues) for l in lines],
+                       "spans": [[list(s) for s in l.spans] for l in lines],
                        "unknown": sorted({w for w, _ in U.encoder.unknown})})
 
 

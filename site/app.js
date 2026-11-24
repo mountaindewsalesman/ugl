@@ -112,7 +112,7 @@ async function onEnglish() {
     if (mine !== encodeSeq) return;            // a newer edit is on its way
     note.textContent = data.unknown.length ? `Not in the dictionary (kept as literals): ${data.unknown.join(", ")}` : "";
     note.hidden = !data.unknown.length;
-    state.sources = data.ugl.map((l, i) => [l, data.sources[i], data.issues[i]]);
+    state.sources = data.ugl.map((l, i) => [l, data.sources[i], data.issues[i], data.spans[i]]);
     setUGL(data.ugl.join("\n"));
   } catch (err) {
     if (mine === encodeSeq) { note.hidden = false; note.textContent = "Could not encode: " + (err.message || err); }
@@ -179,7 +179,8 @@ function renderResults(data) {
       const note = parts.length > 1
         ? el("span", { class: "part" }, ` (part ${k} of ${parts.length}: ${k === 1 ? "main statement" : "split off as its own statement"})`)
         : null;
-      rows.unshift(el("div", { class: "row" }, el("span", { class: "tag" }, "ENGLISH"), el("span", {}, el("span", { class: "source" }, hit[1]), note)));
+      rows.unshift(el("div", { class: "row" }, el("span", { class: "tag" }, "ENGLISH"),
+        el("span", {}, el("span", { class: "source" }, underline(hit[1], parts.length > 1 ? hit[3] : [])), note)));
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "CHECK"), hit[2].length
         ? el("ul", { class: "issues" }, hit[2].map((x) => el("li", {}, x)))
         : el("span", { class: "ok" }, "no known problems")));
@@ -193,6 +194,19 @@ function renderResults(data) {
 function sourceOf(line) {
   const hit = (state.sources || []).find(([l]) => l.split(/\s+/).join(" ") === line);
   return hit || null;
+}
+
+// the sentence with the character ranges this line expresses underlined
+function underline(text, spans) {
+  const out = [];
+  let cur = 0;
+  for (const [a, b] of spans || []) {
+    if (a > cur) out.push(text.slice(cur, a));
+    out.push(el("u", { class: "said" }, text.slice(a, b)));
+    cur = b;
+  }
+  out.push(text.slice(cur));
+  return out;
 }
 
 // readable view as an indented tree: a block per scope, closing tags on their own lines

@@ -67,19 +67,33 @@ def _order(item):
     return (item[2], e.pos if e.pos is not None else 10**6)
 
 
-def resolve(events, unresolved=None):
+def topic_entity(found, topic):
+    """The document's topic (e.g. a Wikipedia title) as an entity: its first
+    mention in the text if there is one (articles open with their subject),
+    else a name made from the title."""
+    words = {w.lower() for w in topic.replace("(", " ").replace(")", " ").split() if len(w) > 2}
+    for e, _role, _sno, _ in found:
+        if e.kind in ("name", "lex") and e.ref is None and words & {w.lower() for w in e.lemma.split()}:
+            return e
+    return Entity("name", topic.split(" (")[0])
+
+
+def resolve(events, unresolved=None, topic=None):
     """events: list of sentence-level Events (one document).  Mutates in place.
     unresolved: optional list; gets (sentence index, pronoun) for every pronoun
-    with nothing to refer to (it then becomes someone / the thing)."""
+    with nothing to refer to (it then becomes someone / the thing).
+    topic: what the document is about (a title); a pronoun that nothing in the
+    last sentences fits refers to it ("It was founded in 1877")."""
     found = []
     for i, ev in enumerate(events):
         if ev is not None:
             mentions(ev, i, found)
     found.sort(key=_order)
+    topic_e = topic_entity(found, topic) if topic else None
     seen = []          # (entity, role, sentence) of real (non-pronoun) mentions
     for e, role, sno, csubj in found:
         if e.kind == "pronoun" and e.ref is None and e.lemma not in RELATIVE:
-            e.ref = pick(e, role, sno, csubj, seen)
+            e.ref = pick(e, role, sno, csubj, seen, topic_e)
             if e.ref is None:
                 if unresolved is not None:
                     unresolved.append((sno, e.lemma))
@@ -89,7 +103,7 @@ def resolve(events, unresolved=None):
     return events
 
 
-def pick(p, role, sno, csubj, seen):
+def pick(p, role, sno, csubj, seen, topic=None):
     w = p.lemma
     if w in REFLEXIVE and csubj is not None and csubj is not p:
         return csubj.root() if csubj.kind != "pronoun" else csubj
@@ -115,6 +129,10 @@ def pick(p, role, sno, csubj, seen):
     if not cands and w in NEUTER:          # "Paris ... it": allow names as a last resort
         cands = [s for s in recent if s[0].kind == "name"]
     if not cands:
+        # the document topic, under the same agreement rules (names fit he/she/it)
+        if topic is not None and topic is not (csubj.root() if csubj is not None and role != "subj" else None) \
+                and (ok(topic) or (w in NEUTER and topic.kind == "name")):
+            return topic
         return None
     # salience: latest sentence first, then subjects, then latest mention
     best = max(cands, key=lambda s: (s[2], s[1] == "subj", seen.index(s)))

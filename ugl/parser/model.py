@@ -51,6 +51,9 @@ class ParserModel:
         self.vocab = {k: {s: i for i, s in enumerate(v)} for k, v in meta["vocabs"].items()}
         self.labels = {k: meta["vocabs"][k] for k in ("upos", "xpos", "feats", "deprel")}
         self.kind = meta.get("encoder", "bilstm")
+        # arc-score temperature fitted on held-out data (tools/calibrate_parser.py --fit),
+        # so a head probability of p means about p of such heads are right
+        self.temperature = float(meta.get("arc_temperature", 1.0))
         self.cache = {}                   # words -> per-layer word vectors, last few sentences
         if self.kind == "transformer":
             from ..transformer import Transformer, WordPiece
@@ -148,6 +151,14 @@ class ParserModel:
         self.cache[key] = out
         return out
 
+    def head_probs(self, S, temperature=None):
+        """P[i, j]: calibrated probability that word i+1 is headed by j (0 = ROOT)."""
+        T = self.temperature if temperature is None else temperature
+        P = S[1:] / T
+        np.fill_diagonal(P[:, 1:], -np.inf)                 # a word cannot head itself
+        P = np.exp(P - P.max(1, keepdims=True))
+        return P / P.sum(1, keepdims=True)
+
     def arc_scores(self, Hs):
         """S[i, j] = score of word j heading word i (index 0 = ROOT)."""
         H = np.concatenate([self.w["root"][None, :], Hs])
@@ -174,10 +185,7 @@ class ParserModel:
 
         S = self.arc_scores(Hs)
         heads = self.decode_tree(S)
-        P = S[1:] - S[1:].max(1, keepdims=True)
-        np.fill_diagonal(P[:, 1:], -1e9)                    # a word cannot head itself
-        P = np.exp(P)
-        P /= P.sum(1, keepdims=True)
+        P = self.head_probs(S)
 
         ld, lh = self.mlp("lab_dep", H), self.mlp("lab_head", H)
         W = self.w["lab_W"]                                   # (L, a, a)

@@ -171,3 +171,4 @@ footer { color: var(--muted); font-size: 0.82rem; padding-bottom: 32px; }
 .issues { margin: 0; padding-left: 1.1em; color: var(--a); font-size: 0.88rem; }
 .ok { color: var(--n); font-size: 0.88rem; }
 .part { color: var(--muted); font-size: 0.85rem; }
+u.said { text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }

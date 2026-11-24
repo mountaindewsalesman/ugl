@@ -128,6 +128,8 @@ def lemmatize(t, toks):
         return "have" if head is not None and head.xpos == "VBN" else "would"
     if t.upos == "PROPN":
         return t.form
+    if t.upos == "ADJ" and t.f("Degree") not in ("Cmp", "Sup"):
+        return w                     # lemminflect strips adjectives like verbs: leading -> "leady"
     if getLemma and t.upos in ("NOUN", "VERB", "ADJ", "ADV", "AUX"):
         r = getLemma(t.form if t.upos != "NOUN" or not t.form.isupper() else t.form, upos=t.upos)
         if r:
@@ -318,14 +320,15 @@ class Analyzer:
 
         # ---- predicate type
         nominal = v.upos not in ("VERB", "AUX") or cop is not None
-        if nominal and cop is None and not v.dep("nsubj", "nsubj:pass", "csubj", "expl"):
-            # fragment ("The man who left.", a heading): just the noun phrase
+        # a verbless phrase with nothing to predicate it of: a fragment ("The man who
+        # left.", "Grateful for any help").  With an inherited subject it is a
+        # predicate instead ("were joyous and optimistic", "remain committed to X").
+        fragment = (nominal and cop is None and inherit_subj is None
+                    and not v.dep("nsubj", "nsubj:pass", "csubj", "expl"))
+        if fragment:
             ev.pred, ev.lemma = "exist", "be"
             ev.subj = self.entity(v)
-            for k in v.dep("advcl"):
-                ev.rels.append(self.subordinate(k, ev))
-            return ev
-        if nominal:
+        elif nominal:
             ev.pred, ev.lemma, ev.pos = "be", "be", (cop.i if cop is not None else v.i)
             if v.upos in ("ADJ", "ADV") or (v.upos == "VERB" and cop is not None):
                 ev.pred_attrs.append(self.attr(v))
@@ -350,7 +353,15 @@ class Analyzer:
         # ---- tense / aspect / mood / negation
         ev.mods += self.verb_mods(v, cop, passive)
 
-        # ---- subject and object
+        # ---- subject and object (a fragment's phrase is its subject already)
+        agent = None if fragment else self.arguments(v, ev, nominal, passive, inherit_subj, loose_prt)
+        # ---- adverbials, relations, subordinate clauses, complements, coordination
+        self.dependents(v, ev, agent)
+        return ev
+
+    def arguments(self, v, ev, nominal, passive, inherit_subj, loose_prt):
+        """Subject, object, indirect object and particle of clause head v.
+        -> the passive agent's token (its "by" phrase is the subject, not a relation)."""
         subj = v.dep1("nsubj", "csubj", "expl")
         psubj = v.dep1("nsubj:pass", "csubj:pass")
         agent = next((o for o in v.dep("obl", "obl:agent")
@@ -375,7 +386,7 @@ class Analyzer:
             ev.subj = self.entity(subj)
         elif inherit_subj is not None:
             ev.subj = refer(inherit_subj)
-        elif not v.dep("aux", "aux:pass") and ("Imp" in (v.f("Mood") or "") or (v.head < 0 and v.xpos == "VB")):
+        elif self.imperative(v):
             ev.subj = Entity("reserved", "n2")
             ev.mods += "o"
         else:
@@ -394,11 +405,25 @@ class Analyzer:
         io = v.dep1("iobj")
         if io is not None:
             ev.rels.append(Rel("to", self.entity(io)))
+        return agent
 
-        # ---- adverbials, relations, subordinate clauses, complements
+    @staticmethod
+    def imperative(v):
+        """A command: no subject, base form, and no auxiliary except the "do" of
+        "Do not / Don't X"."""
+        aux = v.dep("aux", "aux:pass")
+        do_only = all(a.lemma == "do" and a.lower in ("do", "don't") for a in aux)
+        return do_only and ("Imp" in (v.f("Mood") or "") or (v.head < 0 and v.xpos == "VB"))
+
+    def dependents(self, v, ev, agent):
+        """Clause-level dependents of v, the same for verbs, predicates and fragments."""
         for k in v.kids:
             d = k.deprel
-            if d == "advmod":
+            if d == "vocative":
+                # "Hello Louise": the one spoken to is Louise (its own statement)
+                ev.coord.append(("and", Event(pred="be", lemma="be", subj=Entity("reserved", "n2"),
+                                              obj=self.entity(k))))
+            elif d == "advmod":
                 self.adverbial(k, ev)
             elif d in ("obl", "obl:tmod", "obl:npmod", "obl:agent") and k is not agent:
                 ev.rels.append(self.rel_from_case(k))
@@ -419,11 +444,16 @@ class Analyzer:
         # ---- coordination
         for k in v.dep("conj"):
             if k.upos in ("VERB", "AUX", "ADJ") or k.dep("nsubj", "nsubj:pass", "cop"):
-                ev.coord.append((self.link(k), self.clause(k, inherit_subj=ev.subj)))
+                sub = self.clause(k, inherit_subj=ev.subj)
+                if not k.dep("aux", "aux:pass", "cop") and k.xpos not in ("VBD", "VBZ", "VBP") \
+                        and not set(sub.mods) & set("pfhcmu"):
+                    sub.mods += "".join(c for c in ev.mods if c in "pfhcmu")
+                ev.coord.append((self.link(k), sub))
         for k in v.dep("parataxis"):
-            if k.upos in ("VERB", "AUX") or k.dep("nsubj", "cop"):
+            # a loosely attached clause or phrase is its own statement; a verbless
+            # one ("..., a lesson I learned") is a fragment: there is such a thing
+            if k.upos != "PUNCT":
                 ev.coord.append((self.link(k), self.clause(k)))
-        return ev
 
     def verb_mods(self, v, cop, passive):
         m = ""
@@ -562,19 +592,25 @@ class Analyzer:
 
     def complement(self, k, main):
         if k.deprel == "xcomp":
+            # "made him happy", "seems happy", "elected him president", "remain
+            # committed to X": a predicate of the controller, with all its dependents
             ctrl = main.obj if main.obj is not None else main.subj
-            if k.upos in ("ADJ", "NOUN", "PROPN") and not k.dep("cop"):
-                # "made him happy", "seems happy", "elected him president"
-                e = Event(pred="be", lemma="be", subj=refer(ctrl) if ctrl else None)
-                if k.upos == "ADJ":
-                    e.pred_attrs.append(self.attr(k))
-                else:
-                    e.obj = self.entity(k)
-                return e
             return self.clause(k, inherit_subj=ctrl)
         return self.clause(k)
 
     # =============================================================== nouns
+    def participle_only(self, c):
+        """'shared', 'involved', 'searching': an -ed / -ing modifier that the
+        dictionary knows only as a verb is said as a participle clause."""
+        if c.upos == "VERB":
+            return not self.lex.senses(c.lower, "a")
+        if c.upos == "ADJ" and c.lower.endswith(("ed", "ing")) and not self.lex.senses(c.lower, "a"):
+            v = getLemma(c.form, upos="VERB")[0].lower() if getLemma else c.lower
+            if self.lex.senses(v, "v"):
+                c.lemma, c.xpos = v, ("VBN" if c.lower.endswith("ed") else "VBG")
+                return True
+        return False
+
     def attr(self, t):
         mods = ""
         deg = t.f("Degree")
@@ -654,6 +690,20 @@ class Analyzer:
                        parts=[x.i for x in span])
             self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e
+        if not self.lex.senses(t.lemma, "n") and not self.lex.senses(t.lower, "n") \
+                and (self.lex.senses(t.lemma, "a") or self.lex.senses(t.lower, "a")) and t.upos != "VERB":
+            # an adjective standing for a noun phrase ("others", "several of", "optimistic"):
+            # things that are <adjective>
+            word = t.lemma if self.lex.senses(t.lemma, "a") else t.lower
+            if of is not None:                   # "several of his writings": those writings, several
+                inner = self.entity(of)
+                inner.attrs.append(Attr(word, "adj", "", t.i))
+                inner.parts.append(t.i)
+                return inner
+            e = Entity("reserved", "n3", plural=t.f("Number") == "Plur" or t.lower.endswith("s"), pos=t.i,
+                       attrs=[Attr(word, "adj", "", t.i)])
+            self.np_mods(t, e)
+            return e
         e = Entity("lex", t.lemma, pos=t.i)
         if t.xpos == "VBG" or t.upos == "VERB":
             e.cls = "nv"
@@ -671,6 +721,12 @@ class Analyzer:
         return e
 
     def pronoun(self, t):
+        e = self._pronoun(t)
+        if e.pos is None and e.ref is None:
+            e.pos = t.i                          # where it was said (coverage, source spans)
+        return e
+
+    def _pronoun(self, t):
         w, pt = t.lower, t.f("PronType")
         person = t.f("Person")
         plural = t.f("Number") == "Plur"
@@ -735,10 +791,18 @@ class Analyzer:
                 elif w in ("another", "other"):
                     e.attrs.append(Attr("other", "adj", "", c.i))
             elif d == "amod":
-                if c.upos == "VERB" and not self.lex.senses(c.lower, "a"):
+                if self.participle_only(c):
                     e.restrictors.append(self.participle(c, e))
+                elif c.dep("obl", "xcomp", "ccomp", "advcl", "obj"):
+                    # "issues related to your area": the adjective has its own
+                    # complements, so it is a clause about the head
+                    e.restrictors.append(self.clause(c, inherit_subj=e))
                 else:
                     e.attrs.append(self.attr(c))
+                    for k in c.dep("conj"):          # "an interactive and absorbing discussion"
+                        cc = k.dep1("cc")
+                        if k.upos in ("ADJ", "VERB") and (cc is None or cc.lower == "and"):
+                            e.attrs.append(self.attr(k))
             elif d == "nummod":
                 e.count = number_literal(c, number_parts(c))
                 for a in c.dep("advmod"):              # "about 100", "nearly 50": kept as an adverb
@@ -756,9 +820,9 @@ class Analyzer:
                 e.possessor = self.entity(c)
             elif d in ("nmod", "nmod:tmod", "nmod:npmod"):
                 r = self.rel_from_case(c)
-                if r.rel == "of":
+                if r.rel == "of" and e.possessor is None:
                     e.possessor = r.landmark
-                else:
+                else:                                  # a second "of" phrase is a relation, not a 2nd owner
                     e.restrictors.append(Event(pred="exist", subj=refer(e), rels=[r]))
             elif d == "appos":
                 e.restrictors.append(Event(pred="be", lemma="be", subj=refer(e), obj=self.entity(c),
@@ -766,6 +830,12 @@ class Analyzer:
             elif d == "acl:relcl":
                 e.restrictors.append(self.relative(c, e))
                 e.restrictors[-1].aside = self.after_comma(c)
+            elif d == "acl" and (c.dep("nsubj", "nsubj:pass", "expl")
+                                 or any(m.lower in ("that", "whether", "if") for m in c.dep("mark"))):
+                # content clause: "the fact that the company is overpriced".  It has its
+                # own subject and no gap; in UGL a "that" clause without a re-mention
+                # of the head says what the head is
+                e.restrictors.append(self.clause(c))
             elif d == "acl":
                 e.restrictors.append(self.participle(c, e))
                 e.restrictors[-1].aside = self.after_comma(c)

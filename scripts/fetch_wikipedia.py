@@ -10,10 +10,13 @@ Two modes
                    (nothing big is saved to disk).  Good for 10k-1M articles.
         python scripts/fetch_wikipedia.py dump --count 20000
 
-Output: one .txt file per batch of articles, paragraphs separated by newlines.
+Output: one .jsonl file per batch of articles, one article per line:
+    {"title": "Polystyrene", "text": "paragraphs separated by newlines"}
+(read with ugl.corpus.documents; titles give coreference its document topic).
 """
 import argparse
 import bz2
+import json
 import os
 import re
 import sys
@@ -55,7 +58,7 @@ class Writer:
     def add(self, title, text):
         if len(text) < 200:
             return False
-        self.buf.append(text)
+        self.buf.append(json.dumps({"title": title, "text": text}, ensure_ascii=False))
         self.n += 1
         self.chars += len(text)
         if len(self.buf) >= self.per_file:
@@ -65,7 +68,7 @@ class Writer:
     def flush(self):
         if not self.buf:
             return
-        fp = os.path.join(OUT, f"{self.prefix}-{self.stamp}-{self.files:04d}.txt")
+        fp = os.path.join(OUT, f"{self.prefix}-{self.stamp}-{self.files:04d}.jsonl")
         with open(fp, "w", encoding="utf-8") as f:
             f.write("\n".join(self.buf) + "\n")
         self.files += 1

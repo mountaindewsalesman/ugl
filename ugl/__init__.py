@@ -59,10 +59,35 @@ class UGL:
         may become several simpler ones; see simplify)."""
         return self.encoder.encode(text, keep_memory=keep_memory)
 
-    def encode_lines(self, text):
-        """-> list of Line(ugl, source, issues): each UGL line with the English
-        sentence it came from and anything the encoder is unsure of."""
-        return self.encoder.encode_lines(text)
+    def encode_lines(self, text, topic=None, roundtrip=False):
+        """-> list of Line(ugl, source, issues, spans): each UGL line with the
+        English sentence it came from and anything the encoder is unsure of.
+        topic: what the text is about (e.g. an article title), for pronouns.
+        roundtrip: also decode each sentence's UGL to English, encode that
+        again, and flag the sentence if the UGL changes (costs a second parse)."""
+        lines = self.encoder.encode_lines(text, topic)
+        if roundtrip:
+            lines = self._roundtrip(lines)
+        return lines
+
+    def _roundtrip(self, lines):
+        from .encoder import Line
+        groups = {}
+        for l in lines:
+            groups.setdefault(l.source, []).append(l)
+        bad = {}
+        for src, ls in groups.items():
+            ugl = [l.ugl for l in ls]
+            try:
+                english = self.decode("\n".join(ugl))
+                again = [l.ugl for l in self.encoder.encode_lines(english)]
+            except Exception as e:
+                bad[src] = f"round trip failed: {type(e).__name__}"
+                continue
+            if again != ugl:
+                bad[src] = f"round trip changed the UGL (decoded as: {english})"
+        return [Line(l.ugl, l.source, l.issues + ((bad[l.source],) if l.source in bad else ()), l.spans)
+                for l in lines]
 
     def encode_with_sources(self, text):
         """-> [(UGL line, the English sentence it came from)]; a long sentence

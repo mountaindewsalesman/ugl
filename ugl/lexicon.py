@@ -99,6 +99,10 @@ class Lexicon:
         cands = self.senses(lemma, cls)
         if not cands:
             return None
+        # names are looked up by name_tokens(); a word reaching here is a common
+        # word, so proper senses ("the Writings" for writings) go unless nothing else fits
+        common = [s for s in cands if not self.is_proper(self.senses_[s]["tokens"][0])]
+        cands = common or cands
         if len(cands) == 1:
             return cands[0]
         if self.wsd is not None and sent is not None:

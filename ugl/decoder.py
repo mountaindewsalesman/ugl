@@ -606,15 +606,22 @@ class Decoder:
         if r == V["with"] and c.land.head.base == "n7" and c.land.adjs and not c.land.head.mods:
             advs = " ".join(self.adj(a, adverb=True) for a in c.land.adjs)
             return f"{advs}, {self.clause(c.body, ctx, question)}"
+        if self.matches(c.land, ctx.gap):          # "the house in which I live"
+            inner = self.clause(c.body, Ctx(), question)
+            return f"{self.preposition(c)} which {inner}"
+        body = self.clause(c.body, ctx, question)
+        return f"{body} {self.relation(c, ctx)}".strip()
+
+    def preposition(self, c):
+        r = c.rel.idx
         prep = REL_WORD.get(r, RESERVED_VERBS[r][0])
         if "x" in c.rel.mods:
             prep = {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
-        if self.matches(c.land, ctx.gap):          # "the house in which I live"
-            inner = self.clause(c.body, Ctx(), question)
-            return f"{prep} which {inner}"
-        body = self.clause(c.body, ctx, question)
-        land = self.np(c.land, ctx, "obj")
-        return f"{body} {prep} {land}".strip()
+        return prep
+
+    def relation(self, c, ctx):
+        """A relation wrapper's own words: "to the school"."""
+        return f"{self.preposition(c)} {self.np(c.land, ctx, 'obj')}"
 
     def core(self, c, ctx, question=False, infinitive=False, gerund=False):
         v = c.verb
@@ -674,12 +681,17 @@ class Decoder:
         if isinstance(comp, Core):
             same = comp.subj.head.base in (main.subj.head.base, main.obj.head.base if main.obj else None)
             return same and not comp.verb.mods.replace("x", "")
+        if isinstance(comp, Wrap) and VERB_KIND.get(comp.rel.idx) != "quant" \
+                and (comp.land.head.base, "".join(x for x in comp.land.head.mods if x in "qde")) not in ADVERBIAL:
+            return self.infinitival(comp.body, main)        # "to be committed to X"
         return False
 
     def infinitive(self, comp, ctx, to=True):
         if isinstance(comp, Logic):
             word = "or" if comp.rel.idx == V["or"] else "and"
             return f"{self.infinitive(comp.a, ctx, to)} {word} {self.infinitive(comp.b, ctx, to=False)}"
+        if isinstance(comp, Wrap):
+            return f"{self.infinitive(comp.body, ctx, to)} {self.relation(comp, ctx)}"
         s = self.core(comp, ctx, infinitive=True)
         return s if to else s.replace("to ", "", 1) if s.startswith(("to ", "not to ")) else s
 

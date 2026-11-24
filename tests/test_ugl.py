@@ -213,3 +213,45 @@ def test_nothing_dropped_silently():
     for en in ("Its glass transition temperature is high.", "They met the United Nations Security Council."):
         lines = U.encode_lines(en)
         assert not any("was dropped" in i for l in lines for i in l.issues), lines
+
+
+FAMILIES_3 = [
+    # loose verbless side phrases are kept as their own statement
+    ("Do not buy tickets yet - a lesson I learned.", lambda u, e: "lesson" in e),
+    # adjective complements keep their dependents
+    ("The Sunnis remain committed to nationalism.", lambda u, e: "nationalism" in e),
+    # adjectives with complements become clauses about the head
+    ("Please discuss the issues related to your area.", lambda u, e: "area" in e),
+    # joined adjectives
+    ("We need an interactive and lively discussion.", lambda u, e: "interactive" in e and "lively" in e),
+    # words of address
+    ("Hello Louise, the meeting moved.", lambda u, e: "Louise" in e),
+    # negative commands
+    ("Don't go there.", lambda u, e: e.startswith("Do not go")),
+    # content clauses keep their own subject
+    ("This is the fact that the company is overpriced.", lambda u, e: "company" in e),
+    # verbless fragments keep their phrases
+    ("Grateful for any help.", lambda u, e: "help" in e),
+]
+
+
+def test_families_3():
+    fails = []
+    for en, ok in FAMILIES_3:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
+
+
+def test_source_spans():
+    lines = U.encode_lines("My mother, who lives in Ohio, is ill.")
+    src = lines[0].source
+    assert [src[a:b] for a, b in lines[0].spans] == ["My mother", "is ill"]
+    assert [src[a:b] for a, b in lines[1].spans] == ["lives in Ohio"]
+
+
+def test_topic_resolves_pronouns():
+    lines = U.encode_lines("It was founded in 1877.", topic="Sacred Heart Church")
+    assert not any("refers to nothing" in i for l in lines for i in l.issues)

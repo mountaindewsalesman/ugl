@@ -61,16 +61,15 @@ def count_corpus(nlp, files, limit_chars=None):
 
     def texts():
         nonlocal total_chars
-        for fp in files:
-            with open(fp, encoding="utf-8", errors="ignore") as f:
-                for para in f.read().split("\n"):
-                    para = para.strip()
-                    if len(para) < 20:
-                        continue
-                    total_chars += len(para)
-                    if limit_chars and total_chars > limit_chars:
-                        return
-                    yield para[:100000]
+        from .corpus import documents, paragraphs
+        for _title, text in documents(files):
+            for para in paragraphs(text):
+                if len(para) < 20:
+                    continue
+                total_chars += len(para)
+                if limit_chars and total_chars > limit_chars:
+                    return
+                yield para[:100000]
 
     t0 = time.time()
     with nlp.select_pipes(enable=["tok2vec", "tagger", "attribute_ruler", "lemmatizer"]):
@@ -385,7 +384,8 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
         with gzip.open(counts_path, "rt", encoding="utf-8") as f:
             counts = collections.Counter({tuple(k.split("\t")): v for k, v in json.load(f).items()})
     else:
-        files = sorted(glob.glob(os.path.join(raw_dir, "**", "*.txt"), recursive=True))
+        from .corpus import raw_files
+        files = raw_files(raw_dir)
         if not files:
             log(f"no corpus files in {raw_dir}; run scripts/fetch_wikipedia.py first")
             sys.exit(1)
