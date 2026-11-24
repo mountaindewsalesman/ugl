@@ -135,6 +135,35 @@ def name_senses(counts, freq, min_count, max_names):
     return index, extra
 
 
+# unit symbols -> the WordNet senses they can mean (one = exact; several = the
+# sense model chooses among them); shipped in the dictionary as "symbols"
+SYMBOLS = {"°C": ["degree_centigrade.n.01"], "°F": ["degree_fahrenheit.n.01"], "°K": ["kelvin.n.01"],
+           "°": ["degree.n.04", "degree.n.06"], "%": ["percentage.n.01"]}
+
+
+COMMON_SHARE = 0.25     # a spelling "commonly used" for a sense: >= this x the most-used one
+
+
+def headword_rank(s, l, b, share, counts):
+    """How good lemma l is as the display word of concept s (higher = better):
+      1. a word, not an abbreviation ("metre", not "m", which inflects to "ms")
+      2. reversible among the spellings commonly used for s: encoding l with no
+         context gives s back, so decode -> encode is stable.  Rare synonyms do
+         not qualify ("shew" for show), so readability is never traded away.
+      3. the spelling most used in this sense (corpus count spread over senses)"""
+    def used(x):
+        w = x.name().replace("_", " ")
+        return share.get((s.name(), w.lower()), 0.0) + counts.get((w, "name"), 0)
+    name = l.name()
+    word = name.replace("_", " ")
+    wordlike = len(word) >= 3 and any(c in "aeiouy" for c in word.lower())
+    common = used(l) >= COMMON_SHARE * max(used(x) for x in s.lemmas())
+    first = next((x for x in wn.synsets(name, pos=s.pos()) if not x.instance_hypernyms()
+                  and not all(y.name()[:1].isupper() for y in x.lemmas())), None)
+    reversible = first is not None and (first == s or b.decided.get(first.name()) == b.decided.get(s.name()))
+    return (wordlike, common and reversible, used(l), l.count(), -s.lemmas().index(l))
+
+
 def sense_frequencies(counts, share=None):
     """-> freq[sense].  If share (a dict) is given it is filled with
     share[(sense, lemma)] = how many of the sense's uses were spelled lemma,
@@ -435,9 +464,7 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
             ccls = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}[s.pos()]
             # headword: the spelling most used *in this sense* (a lemma's corpus
             # count spread over its senses), so car.n.01 reads "car", not "machine"
-            best = max(s.lemmas(), key=lambda l: (share.get((s.name(), l.name().lower().replace("_", " ")), 0.0)
-                                                  + counts.get((l.name().replace("_", " "), "name"), 0),
-                                                  l.count(), -s.lemmas().index(l)))
+            best = max(s.lemmas(), key=lambda l: headword_rank(s, l, b, share, counts))
             ids[tok] = {"sense": s.name(), "lemma": best.name().replace("_", " "),
                         "freq": round(freq[s.name()], 4), "gloss": s.definition()}
             # a proper noun: WordNet lists it as an instance (Paris is an instance of
@@ -516,6 +543,7 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
         "primitives": ids,
         "senses": senses,
         "index": index,
+        "symbols": {k: [s for s in v if s in mapping] for k, v in SYMBOLS.items()},
         "person_senses": person_senses,
         "classes": classes,
         "names": name_index,          # exact proper name -> sense (format addition, v1-compatible)

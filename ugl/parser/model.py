@@ -177,25 +177,36 @@ class ParserModel:
         {form, upos, xpos, feats, head (1-based, 0=root), deprel}."""
         if not words:
             return []
+        state = self.score(words)
+        return self.tree(state, self.decode_tree(state["S"]))
+
+    def score(self, words):
+        """Everything the parser computes for a sentence before choosing a tree."""
         Hs = self.encode(words)                              # (n, d)
         H = np.concatenate([self.w["root"][None, :], Hs])    # (n+1, d), index 0 = ROOT
-        upos = self.lin("upos", Hs).argmax(1)
-        xpos = self.lin("xpos", Hs).argmax(1)
-        feats = self.lin("feats", Hs).argmax(1)
-
         S = self.arc_scores(Hs)
-        heads = self.decode_tree(S)
-        P = self.head_probs(S)
+        return {"words": words, "S": S, "P": self.head_probs(S),
+                "upos": self.lin("upos", Hs).argmax(1), "xpos": self.lin("xpos", Hs).argmax(1),
+                "feats": self.lin("feats", Hs).argmax(1),
+                "ld": self.mlp("lab_dep", H), "lh": self.mlp("lab_head", H)}
 
-        ld, lh = self.mlp("lab_dep", H), self.mlp("lab_head", H)
-        W = self.w["lab_W"]                                   # (L, a, a)
+    def tree(self, state, heads):
+        """The token dicts for a given choice of heads (labels scored for those arcs)."""
+        ld, lh, P, W = state["ld"], state["lh"], state["P"], self.w["lab_W"]
         out = []
-        for i in range(1, len(H)):
+        for i in range(1, len(ld)):
             j = heads[i]
             s = np.einsum("a,lab,b->l", ld[i], W, lh[j]) + self.lin("lab_lin", np.concatenate([ld[i], lh[j]]))
-            out.append({"form": words[i - 1], "upos": self.labels["upos"][upos[i - 1]],
-                        "xpos": self.labels["xpos"][xpos[i - 1]],
-                        "feats": self.labels["feats"][feats[i - 1]],
+            out.append({"form": state["words"][i - 1], "upos": self.labels["upos"][state["upos"][i - 1]],
+                        "xpos": self.labels["xpos"][state["xpos"][i - 1]],
+                        "feats": self.labels["feats"][state["feats"][i - 1]],
                         "head": int(j), "deprel": self.labels["deprel"][int(s.argmax())],
                         "conf": float(P[i - 1, j])})       # probability of the chosen head
         return out
+
+    def alternative(self, state, tree, i):
+        """The best tree in which word i (0-based) does NOT take its chosen head:
+        what the sentence would mean if that uncertain attachment were wrong."""
+        S = state["S"].copy()
+        S[i + 1, tree[i]["head"]] = -1e9
+        return self.tree(state, self.decode_tree(S))

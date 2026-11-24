@@ -61,3 +61,10 @@ Fields added in later dictionaries (all optional when reading):
 * `names` (0.3.0+): `{"Barack Obama": "name:Barack Obama", "Paris": "paris.n.01"}`,
   mapping frequent proper names to senses. Name primitives carry `"proper": true`.
 * `literal_pieces` (0.4.0+): subword pieces (BPE) for spelling literals.
+* `symbols` (0.6.0+): `{"°C": ["degree_centigrade.n.01"], "°": ["degree.n.04", "degree.n.06"]}`,
+  unit symbols mapped to the senses they can mean (one = exact; several = the
+  sense model chooses among them).
+* Headwords (0.6.0+): a primitive's `lemma` is chosen so that encoding it with
+  no context gives the same tokens back (decode -> encode is stable), prefers
+  real words over abbreviations ("metre", not "m"), then the spelling most used
+  in that sense (0.5.0+).

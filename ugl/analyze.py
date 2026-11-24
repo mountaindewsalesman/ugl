@@ -54,6 +54,16 @@ PREP = {
     "in front of": "in front of", "according to": "from", "instead of": "except",
     "per": "for", "than": "against", "beyond": "out of", "past": "after", "off": "from",
     "up": "above", "down": "under", "out": "out of", "away from": "from", "upon": "on",
+    # multiword prepositions (UD: first word + fixed)
+    "prior to": "before", "ahead of": "before", "subsequent to": "after", "following": "after",
+    "along with": "with", "together with": "with", "in addition to": "with", "plus": "with",
+    "apart from": "except", "aside from": "except", "rather than": "except", "other than": "except",
+    "owing to": "cause", "thanks to": "cause", "close to": "near", "near to": "near",
+    "such as": "like", "as for": "about", "in terms of": "about", "with respect to": "about",
+    "with regard to": "about", "in relation to": "about", "on behalf of": "for",
+    "in favor of": "for", "in favour of": "for", "by means of": "with", "on top of": "on",
+    "across from": "across", "amid": "during", "amidst": "during", "versus": "against",
+    "vs": "against", "vs.": "against", "unto": "to",
 }
 NEGATING = {"without", "unlike"}
 TIME_SENSITIVE = {"at", "in", "on"}        # become "time" when the landmark is a time
@@ -107,17 +117,10 @@ class Tok:
         return f"{self.form}/{self.upos}/{self.deprel}"
 
 
-# unit symbols -> the dictionary's word for the unit
-SYMBOL_LEMMA = {"°c": "degree Celsius", "°f": "degree Fahrenheit", "°k": "kelvin", "°": "degree",
-                "%": "percent"}
-
-
 def lemmatize(t, toks):
     if t.lemma:
         return t.lemma
     w = t.lower
-    if w in SYMBOL_LEMMA:
-        return SYMBOL_LEMMA[w]
     if w in CLITIC_LEMMA:
         return CLITIC_LEMMA[w]
     if w in ("'s", "’s") and t.upos == "AUX":
@@ -520,7 +523,9 @@ class Analyzer:
 
     def rel_from_case(self, k):
         """obl / nmod with its case marker -> Rel(relation, landmark)."""
-        case = [c for c in k.dep("case") if c.upos in ("ADP", "SCONJ", "ADV", "PART")]
+        # the case relation makes a word a preposition, whatever its tag ("prior to": prior/ADJ);
+        # the possessive 's is case-marked too but is not a preposition
+        case = [c for c in k.dep("case") if c.lower not in ("'s", "’s", "'")]
         words = []
         for c in case:
             words.append(c.lower)
@@ -528,7 +533,12 @@ class Analyzer:
         prep = " ".join(words)
         land = self.entity(k)
         if not prep:
-            rel = "time" if k.deprel in ("obl:tmod", "nmod:tmod") or self.is_time(k, land) else "of"
+            if k.deprel in ("obl:tmod", "nmod:tmod") or self.is_time(k, land):
+                rel = "time"
+            elif k.deprel == "nmod" and self.after_comma(k):
+                rel = "in"                       # "Paris, France": a place inside the next one
+            else:
+                rel = "of"
             return Rel(rel, land)
         rel = PREP.get(prep) or PREP.get(words[0])
         if rel is None:
@@ -581,11 +591,20 @@ class Analyzer:
             if wh is not None:
                 words = [wh.lower]
         key = " ".join(words)
-        if words:
-            rel = (SUBORD.get(key) or SUBORD.get(words[0]) or PREP.get(key) or PREP.get(words[0]) or "of")
+        finite = bool(k.dep("nsubj", "nsubj:pass", "expl", "csubj"))
+        if key == "as" and not finite:
+            rel = "as"                     # "shown as extending", "known as X": in the role of, not because
+        elif words:
+            rel = SUBORD.get(key) or SUBORD.get(words[0]) or PREP.get(key) or PREP.get(words[0])
+            if rel is None:
+                self.issues.append(f"subordinator '{key}' not in the relation table; read as 'of'")
+                rel = "of"
         else:
             rel = "time"                               # bare participial clause: "Running, he fell"
-        sub = self.clause(k, inherit_subj=main.subj)
+        # the clause's understood subject is the main clause's surface subject
+        # ("It was shown as extending": it extends)
+        surface = main.obj if main.passive and main.obj is not None else main.subj
+        sub = self.clause(k, inherit_subj=surface)
         if key == "unless":
             sub.mods += "x"
         return Rel(rel, sub)
@@ -671,8 +690,9 @@ class Analyzer:
             if e.kind == "reserved":                   # "someone who can help", "something new"
                 self.np_mods(t, e)
             return e
-        if t.lower in SYMBOL_LEMMA:
-            e = Entity("lex", t.lemma, pos=t.i, plural=False)
+        if t.form in self.lex.symbols:                # a unit symbol: its senses come from the dictionary
+            senses = self.lex.symbols[t.form]
+            e = Entity("lex", senses[0].rsplit(".", 2)[0].replace("_", " "), pos=t.i, senses=list(senses))
             self.np_mods(t, e)
             return e
         if t.upos == "NUM" or (t.xpos == "CD"):

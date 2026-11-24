@@ -58,6 +58,8 @@ class Lexicon:
         self.classes = {k: set(v) for k, v in d.get("classes", {"person": d["person_senses"]}).items()}
         self.names = d.get("names", {})      # exact proper name -> sense
         self.literal_pieces = d.get("literal_pieces", [])
+        # unit symbols ("°C", "%") -> the senses they can mean (dictionary 0.6.0+)
+        self.symbols = d.get("symbols", {})
         self.wsd = None                      # optional sense disambiguator (see ugl.wsd)
 
     # ------------------------------------------------------------ encode side
@@ -95,8 +97,10 @@ class Lexicon:
         s = self.index["n"].get(lemma.lower())
         return bool(s) and s[0] in self.person
 
-    def choose_sense(self, lemma, cls, context=(), sent=None):
+    def choose_sense(self, lemma, cls, context=(), sent=None, only=None):
         cands = self.senses(lemma, cls)
+        if only:                                    # e.g. a symbol's possible senses
+            cands = [s for s in only if s in self.senses_] or cands
         if not cands:
             return None
         # names are looked up by name_tokens(); a word reaching here is a common
@@ -112,9 +116,10 @@ class Lexicon:
         # fallback: most frequent sense (index order)
         return cands[0]
 
-    def encode_word(self, lemma, cls, mods="", context=(), sent=None):
-        """List of UGL tokens for a word (mods go on the head token), or None."""
-        s = self.choose_sense(lemma, cls, context, sent)
+    def encode_word(self, lemma, cls, mods="", context=(), sent=None, only=None):
+        """List of UGL tokens for a word (mods go on the head token), or None.
+        only: restrict the choice to these senses."""
+        s = self.choose_sense(lemma, cls, context, sent, only)
         if s is None:
             return None
         toks = list(self.senses_[s]["tokens"])

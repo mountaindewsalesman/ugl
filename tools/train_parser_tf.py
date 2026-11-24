@@ -304,6 +304,8 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wsd-bs", type=int, default=8, help="SemCor sentences per sense batch (one per parser batch)")
     ap.add_argument("--no-wsd", action="store_true")
+    ap.add_argument("--amp", action="store_true", help="bf16 mixed precision on the GPU")
+    ap.add_argument("--resume", action="store_true", help="continue from <out>.ckpt.pt after an interruption")
     a = ap.parse_args()
     global DEVICE, MODEL
     DEVICE, MODEL = torch.device(a.device), a.model
@@ -356,8 +358,17 @@ def main():
     warm = max(1, steps // 20)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / warm) * max(0.0, (steps - s) / max(1, steps - warm)))
 
-    best, best_state = -1, None
-    for ep in range(1, a.epochs + 1):
+    best, best_state, start = -1, None, 1
+    ckpt = a.out + ".ckpt.pt"
+    if a.resume and os.path.exists(ckpt):          # continue an interrupted run
+        c = torch.load(ckpt, map_location=DEVICE, weights_only=False)
+        net.load_state_dict(c["net"])
+        opt.load_state_dict(c["opt"])
+        sched.load_state_dict(c["sched"])
+        best, best_state, start = c["best"], c["best_state"], c["epoch"] + 1
+        random.setstate(c["rng"])
+        print(f"resumed after epoch {c['epoch']} (best dev score {best:.4f})", flush=True)
+    for ep in range(start, a.epochs + 1):
         t0 = time.time()
         order = sorted(range(len(E_train)), key=lambda i: len(E_train[i]["ids"]) + random.random() * 6)
         batches = [order[i:i + a.bs] for i in range(0, len(order), a.bs)]
@@ -367,22 +378,24 @@ def main():
             random.shuffle(W_train)
         for step, bi in enumerate(batches):
             b = batchify([E_train[i] for i in bi])
-            h, S, ld, lh = net(b)
-            m = b["mask"]
-            pad = torch.cat([torch.ones_like(m[:, :1]), m], 1)
-            Sm = S[:, 1:, :].masked_fill(~pad.unsqueeze(1), -1e9)
-            loss = F.cross_entropy(Sm[m], b["head"][m])
-            heads_full = torch.cat([torch.zeros_like(b["head"][:, :1]), b["head"]], 1)
-            L = net.label_scores(ld, lh, heads_full)[:, 1:]
-            loss = loss + F.cross_entropy(L[m], b["deprel"][m])
-            for k in ("upos", "xpos", "feats"):
-                gold = b[k][m]
-                if (gold != IGNORE).any():
-                    loss = loss + F.cross_entropy(getattr(net, k)(h)[m], gold, ignore_index=IGNORE)
-            if W_train:                     # one sense batch per parser batch, same optimizer step
-                k0 = (step * a.wsd_bs) % len(W_train)
-                w = wsd_batch(W_train[k0:k0 + a.wsd_bs] or W_train[: a.wsd_bs], lex, wp)
-                loss = loss + F.cross_entropy(net.wsd_logits(w), w["gold"])
+            # bf16 mixed precision (--amp): same maths, about twice as fast for base-size encoders
+            with torch.autocast(DEVICE.type, dtype=torch.bfloat16, enabled=a.amp):
+                h, S, ld, lh = net(b)
+                m = b["mask"]
+                pad = torch.cat([torch.ones_like(m[:, :1]), m], 1)
+                Sm = S[:, 1:, :].float().masked_fill(~pad.unsqueeze(1), -1e9)
+                loss = F.cross_entropy(Sm[m], b["head"][m])
+                heads_full = torch.cat([torch.zeros_like(b["head"][:, :1]), b["head"]], 1)
+                L = net.label_scores(ld, lh, heads_full)[:, 1:].float()
+                loss = loss + F.cross_entropy(L[m], b["deprel"][m])
+                for k in ("upos", "xpos", "feats"):
+                    gold = b[k][m]
+                    if (gold != IGNORE).any():
+                        loss = loss + F.cross_entropy(getattr(net, k)(h)[m].float(), gold, ignore_index=IGNORE)
+                if W_train:                     # one sense batch per parser batch, same optimizer step
+                    k0 = (step * a.wsd_bs) % len(W_train)
+                    w = wsd_batch(W_train[k0:k0 + a.wsd_bs] or W_train[: a.wsd_bs], lex, wp)
+                    loss = loss + F.cross_entropy(net.wsd_logits(w).float(), w["gold"])
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), 5.0)
@@ -395,7 +408,11 @@ def main():
               f"  sense {wa:.4f}  ({time.time()-t0:.0f}s)", flush=True)
         if la + wa > best:                  # both jobs count when picking the epoch
             best = la + wa
-            best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+            best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+        # checkpoint every epoch (written to a temporary file, then renamed: never half-written)
+        torch.save({"epoch": ep, "net": net.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                    "best": best, "best_state": best_state, "rng": random.getstate()}, ckpt + ".tmp")
+        os.replace(ckpt + ".tmp", ckpt)
     net.load_state_dict(best_state)
     up, ua, la = evaluate(net, E_test)
     print(f"TEST  UPOS {up:.4f}  UAS {ua:.4f}  LAS {la:.4f}  (greedy heads)", flush=True)

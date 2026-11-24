@@ -20,9 +20,9 @@ class Serializer:
         self.words = []           # current sentence words, for sense choice
 
     # ------------------------------------------------------------- words
-    def word(self, lemma, cls, mods="", pos=None):
+    def word(self, lemma, cls, mods="", pos=None, only=None):
         sent = (self.words, pos) if pos is not None and self.words else None
-        r = self.lex.encode_word(lemma, cls, mods, sent=sent)
+        r = self.lex.encode_word(lemma, cls, mods, sent=sent, only=only)
         if r is None and cls == "a":
             r = self.lex.encode_word(lemma, "r", mods, sent=sent)
         if r is None:
@@ -82,7 +82,7 @@ class Serializer:
         elif e.kind == "num":
             head = [e.lemma]
         else:
-            toks = self.word(e.lemma, "v" if e.cls == "nv" else "n", mods, pos=e.pos)
+            toks = self.word(e.lemma, "v" if e.cls == "nv" else "n", mods, pos=e.pos, only=e.senses)
             if e.cls == "nv" and toks[0].startswith("v"):
                 toks[0] = "nv" + toks[0][1:]
             head = toks

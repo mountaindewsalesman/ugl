@@ -92,6 +92,8 @@ class Encoder:
         self.parser = parser or ParserModel(DEFAULT_PATH)
         self.analyzer = Analyzer(lexicon)
         self.serializer = Serializer(lexicon)
+        # separate instances for meaning checks, so checking never disturbs encoding
+        self._check_an, self._check_se = Analyzer(lexicon), Serializer(lexicon)
         self.strip_parens = strip_parens
         self.simplify = simplify
         self.unsure = unsure
@@ -101,14 +103,42 @@ class Encoder:
         return self.serializer.unknown
 
     def parse(self, text):
-        """-> list of (words, UD token dicts) per sentence."""
+        """-> list of (words, UD token dicts, question?, source text, parser state) per sentence."""
         if self.strip_parens:
             text = strip_asides(text)
         out = []
         for s in split_sentences(text):
             words = tokenize(s)
             if any(w[:1].isalnum() for w in words):
-                out.append((words, self.parser.parse(words), s.rstrip().endswith("?"), s.strip()))
+                state = self.parser.score(words)
+                tree = self.parser.tree(state, self.parser.decode_tree(state["S"]))
+                out.append((words, tree, s.rstrip().endswith("?"), s.strip(), state))
+        return out
+
+    def meaning(self, tree, words, question):
+        """The UGL a tree gives on its own (no cross-sentence coreference): what
+        the uncertainty check compares."""
+        try:
+            ev = self._check_an.sentence(tree, question=question)
+            resolve([ev])
+            return "\n".join(self._check_se.sentence(p, words) for p in split(ev))
+        except Exception as e:
+            return f"<failed: {type(e).__name__}>"
+
+    def uncertain(self, words, tree, question, state):
+        """Words whose head the parser is unsure of AND whose next-best
+        attachment would change the UGL.  Uncertainty that cannot change the
+        meaning ("the" attached to either of two nouns that end up the same)
+        is not an issue."""
+        out, base = [], None
+        for i, t in enumerate(tree):
+            if t.get("conf", 1.0) >= self.unsure or t["upos"] == "PUNCT" or name_internal(t, tree):
+                continue
+            base = base if base is not None else self.meaning(tree, words, question)
+            alt = self.parser.alternative(state, tree, i)
+            if self.meaning(alt, words, question) != base:
+                out.append(f"uncertain grammar at '{t['form']}' ({t['conf']:.0%} sure of its head; "
+                           f"the other reading means something else)")
         return out
 
     def encode(self, text, keep_memory=False, with_sources=False):
@@ -122,10 +152,8 @@ class Encoder:
         lines with no issues (see tools/build_corpus.py)."""
         parsed = self.parse(text)
         events, issues, toks = [], [], []
-        for words, tree, question, _ in parsed:
-            found = [f"uncertain grammar at '{t['form']}' ({t['conf']:.0%} sure of its head)"
-                     for t in tree if t.get("conf", 1.0) < self.unsure and t["upos"] != "PUNCT"
-                     and not name_internal(t, tree)]
+        for words, tree, question, _, state in parsed:
+            found = self.uncertain(words, tree, question, state)
             try:
                 ev = self.analyzer.sentence(tree, question=question)
                 events.append(ev)
@@ -142,7 +170,7 @@ class Encoder:
         for sno, w in unresolved:
             issues[sno].append(f"'{w}' refers to nothing earlier; written as a generic someone / thing")
         out = []
-        for (words, _, _, src), ev, found, tk in zip(parsed, events, issues, toks):
+        for (words, _, _, src, _), ev, found, tk in zip(parsed, events, issues, toks):
             if ev is None or isinstance(ev, Exception):
                 out.append(Line("n?[unparsed]", src, found))
                 continue

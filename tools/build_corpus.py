@@ -43,11 +43,16 @@ def main():
     ap.add_argument("--max-sents", type=int, default=None)
     ap.add_argument("--min-confidence", type=float, default=0.9,
                     help="calibrated head probability every word needs (see tools/calibrate_parser.py)")
+    ap.add_argument("--parser", default=None,
+                    help="parser weights to use instead of the shipped one (e.g. the larger corpus parser)")
     ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
     ap.add_argument("--allow", nargs="*", default=[], help="issue kinds to tolerate, e.g. 'unknown word'")
     a = ap.parse_args()
     u = ugl.UGL()
     u.encoder.unsure = a.min_confidence
+    if a.parser:
+        from ugl.parser.model import ParserModel
+        u.encoder.parser = ParserModel(a.parser)
     os.makedirs(a.out, exist_ok=True)
     fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8")
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")

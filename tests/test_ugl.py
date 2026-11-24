@@ -227,7 +227,7 @@ FAMILIES_3 = [
     # words of address
     ("Hello Louise, the meeting moved.", lambda u, e: "Louise" in e),
     # negative commands
-    ("Don't go there.", lambda u, e: e.startswith("Do not go")),
+    ("Don't go there.", lambda u, e: e.startswith("Do not ") and " v" in " " + u and "ox" in u),
     # content clauses keep their own subject
     ("This is the fact that the company is overpriced.", lambda u, e: "company" in e),
     # verbless fragments keep their phrases
@@ -255,3 +255,23 @@ def test_source_spans():
 def test_topic_resolves_pronouns():
     lines = U.encode_lines("It was founded in 1877.", topic="Sacred Heart Church")
     assert not any("refers to nothing" in i for l in lines for i in l.issues)
+
+
+FAMILIES_4 = [
+    # "as" without a subject of its own is a role, not a cause
+    ("It was shown as extending to the river.", lambda u, e: "because" not in e),
+    # multiword prepositions, whatever the parser tags their first word
+    ("Thawai was a village prior to independence.", lambda u, e: "before" in e),
+    # "Paris, France": a place inside the next one
+    ("He was born in Paris, France.", lambda u, e: "in France" in e),
+]
+
+
+def test_families_4():
+    fails = []
+    for en, ok in FAMILIES_4:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
