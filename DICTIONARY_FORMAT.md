@@ -49,5 +49,15 @@ Compatibility rules:
 * Token numbers are only meaningful together with a dictionary `version`.
   Store the version next to any data you encode, for example in a training
   set's metadata.
-* `ugl.Tokenizer` derives its integer ids from the dictionary alone, so the
-  same dictionary version always gives the same ids.
+* `ugl.Tokenizer` derives its integer ids from the dictionary plus its own
+  layout version, `ugl.tokenizer.SCHEME`. The same (dictionary version,
+  scheme) pair always gives the same ids, so record both next to tokenized
+  data. Scheme 2 is current.
+
+Fields added in later dictionaries (all optional when reading):
+
+* `classes` (0.2.0+): `{"person"|"time"|"place": [senses]}`, the semantic
+  classes the encoder uses.
+* `names` (0.3.0+): `{"Barack Obama": "name:Barack Obama", "Paris": "paris.n.01"}`,
+  mapping frequent proper names to senses. Name primitives carry `"proper": true`.
+* `literal_pieces` (0.4.0+): subword pieces (BPE) for spelling literals.

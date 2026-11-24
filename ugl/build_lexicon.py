@@ -481,6 +481,17 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
             e["why"] = b.how[s.name()]
         senses[s.name()] = e
 
+    log("step 5: literal pieces")
+    from .pieces import learn
+    literal = collections.Counter()
+    for (text, c), n in counts.items():
+        if c == "name" and text not in name_index:
+            literal[re.sub(r"\s+", "_", text)] += n            # rare names stay literals
+        elif c in ("n", "v", "a", "r") and not any(wn.synsets(text.replace(" ", "_"), pos=p) for p in WN_FOR_CLASS[c]):
+            literal[text.replace(" ", "_")] += n               # words WordNet lacks
+    pieces = learn(literal, n_pieces=4000)
+    log(f"  {len(pieces)} pieces from {len(literal)} literal strings")
+
     dictionary = {
         "format": "ugl-dictionary",
         "format_version": 1,
@@ -500,6 +511,7 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
         "person_senses": person_senses,
         "classes": classes,
         "names": name_index,          # exact proper name -> sense (format addition, v1-compatible)
+        "literal_pieces": pieces,     # subword pieces for spelling literals (tokenizer)
     }
     write_dictionary(dictionary, out_path)
     export_tsv(dictionary, os.path.dirname(out_path))

@@ -144,6 +144,17 @@ Token counts only save compute if a model uses UGL tokens as its vocabulary,
 one token per concept. A standard tokenizer splits `n26988` into several
 pieces.
 
+## Token cost (tokenizer ids per English word, 150 Wikipedia sentences)
+
+`python tools/token_cost.py ugl-dict-0.2.0.json.gz ugl-dict-0.4.0.json.gz`
+
+| step | ids / word |
+|---|---|
+| dictionary 0.2.0, tokenizer scheme 1 (names spelled letter by letter) | 3.13 |
+| + frequent proper nouns are numbered nouns (dictionary 0.3.0) | 2.72 |
+| + one-id closing tags for relation verbs (scheme 2) | 2.48 |
+| + subword pieces for the remaining literals (dictionary 0.4.0) | **1.99** |
+
 ## Choosing word meanings (optional, local)
 
 Each word's meaning is chosen with a BERT model that runs on your machine.

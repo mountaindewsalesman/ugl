@@ -57,6 +57,7 @@ class Lexicon:
         self.person = set(d["person_senses"])
         self.classes = {k: set(v) for k, v in d.get("classes", {"person": d["person_senses"]}).items()}
         self.names = d.get("names", {})      # exact proper name -> sense
+        self.literal_pieces = d.get("literal_pieces", [])
         self.wsd = None                      # optional sense disambiguator (see ugl.wsd)
 
     # ------------------------------------------------------------ encode side
