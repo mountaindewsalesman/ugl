@@ -184,3 +184,32 @@ def test_quality_flags():
 def test_tree_view():
     rows = U.humanizer.tree(r"#9 v20 n1 v444p n2344t \v20")
     assert [r["depth"] for r in rows] == [0, 1, 0] and rows[-1]["ugl"] == r"\v20"
+
+
+FAMILIES_2 = [
+    # unit symbols are one word and a real unit
+    ("Water boils at 100 °C.", lambda u, e: "°" not in u and "'C'" not in u),
+    # reduced passive clauses: the subject is what undergoes the action
+    ("Polystyrene flows if heated.", lambda u, e: "someone heats" in e.lower()),
+    # approximate numbers keep their adverb
+    ("It costs about 100 dollars.", lambda u, e: "about" in e or "approximately" in e),
+    # extraposed clause subjects are kept
+    ("It will take me a while to read the book.", lambda u, e: "read" in e),
+]
+
+
+def test_families_2():
+    fails = []
+    for en, ok in FAMILIES_2:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
+
+
+def test_nothing_dropped_silently():
+    # stacked compounds and nested name words reach the UGL
+    for en in ("Its glass transition temperature is high.", "They met the United Nations Security Council."):
+        lines = U.encode_lines(en)
+        assert not any("was dropped" in i for l in lines for i in l.issues), lines

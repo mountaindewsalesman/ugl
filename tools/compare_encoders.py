@@ -41,10 +41,15 @@ def f1(a, b):
     return 0 if p + r == 0 else 2 * p * r / (p + r)
 
 
+DROPPED = []      # per encode_tree call: content words that did not reach the UGL
+
+
 def encode_tree(lex, tree, words, question):
+    from ugl.coverage import missing
     an, se = Analyzer(lex), Serializer(lex)
     try:
         ev = an.sentence(tree, question=question)
+        DROPPED.append(missing(an.toks, ev))
         resolve([ev])
         return chr(10).join(se.sentence(part, words) for part in split(ev)), None
     except Exception as e:
@@ -57,7 +62,7 @@ def gold_eval(u, n, parser_path):
     sents = list(read_conllu(os.path.join(ROOT, "data", "ud", "en_ewt-ud-test.conllu")))
     random.Random(0).shuffle(sents)
     sents = [s for s in sents if 4 <= len(s) <= 30][:n]
-    exact = f1s = gold_err = pred_err = dec_err = 0
+    exact = f1s = gold_err = pred_err = dec_err = gold_drop = 0
     errors = collections.Counter()
     for s in sents:
         words = [t["form"] for t in s]
@@ -65,6 +70,7 @@ def gold_eval(u, n, parser_path):
         # same lemmatizer on both sides, so differences are tree/tag differences only
         gold = [{k: v for k, v in t.items() if k != "lemma"} for t in s]
         g, ge = encode_tree(u.lexicon, gold, words, q)
+        gold_drop += bool(not ge and DROPPED[-1])
         pred = parser.parse(words)
         p, pe = encode_tree(u.lexicon, pred, words, q)
         if ge:
@@ -84,6 +90,7 @@ def gold_eval(u, n, parser_path):
     print(f"{len(sents)} EWT test sentences (4-30 tokens), parser {os.path.basename(parser_path or 'default')}")
     print(f"  analyzer/serializer crashes on GOLD trees : {gold_err}  {dict(errors)}")
     print(f"  gold-tree UGL that fails to decode        : {dec_err}")
+    print(f"  gold trees with a dropped content word    : {gold_drop} ({gold_drop / max(1, n_ok):.1%})")
     print(f"  predicted-tree crashes                    : {pred_err}")
     print(f"  predicted == gold UGL (exact)             : {exact / n_ok:.1%}")
     print(f"  predicted vs gold token F1                : {f1s / n_ok:.3f}")

@@ -12,6 +12,7 @@ from .parser.model import ParserModel, DEFAULT_PATH
 from .parser.tokenize import split_sentences, tokenize
 from .serialize import Serializer
 from .simplify import split
+from .coverage import missing
 
 _ASIDE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]")
 
@@ -89,8 +90,10 @@ class Encoder:
                      for t in tree if t.get("conf", 1.0) < UNSURE and t["upos"] != "PUNCT"
                      and not name_internal(t, tree)]
             try:
-                events.append(self.analyzer.sentence(tree, question=question))
+                ev = self.analyzer.sentence(tree, question=question)
+                events.append(ev)
                 found += self.analyzer.issues
+                found += [f"'{w}' was dropped: it is not in the UGL" for w in missing(self.analyzer.toks, ev)]
             except Exception as e:          # keep going; report the sentence as unparsed
                 events.append(e)
                 found.append(f"analyzer failed: {type(e).__name__}")

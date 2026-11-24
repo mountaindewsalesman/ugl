@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ugl  # noqa: E402
 
 KIND = [("uncertain grammar", "uncertain parse"), ("refers to nothing", "unresolved pronoun"),
-        ("not in the dictionary", "unknown word"), ("no clear grammatical role", "dropped word"),
+        ("not in the dictionary", "unknown word"), ("no clear grammatical role", "unattached word"),
+        ("was dropped", "dropped content word"),
         ("not in the relation table", "unknown preposition"), ("failed", "crash")]
 
 

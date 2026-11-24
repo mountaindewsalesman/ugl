@@ -14,6 +14,7 @@ _TOKEN = re.compile(r"""
     (?:[A-Za-z]\.){2,}                    # U.S.  e.g.
   | \d+(?:[.,:]\d+)*(?:st|nd|rd|th|s)?    # 1,823  3.14  12:30  1990s  21st
   | [^\W\d_]+(?:[-'’][^\W\d_]+)*          # words, hyphenated words, o'clock
+  | °[CFK](?![A-Za-z])|°                 # 100 °C: the unit is one word
   | \.\.\.|--|[^\w\s]                     # punctuation
   | \S
 """, re.X | re.U)

@@ -42,6 +42,8 @@ class Entity:
     gender: Optional[str] = None
     is_person: bool = False
     pos: Optional[int] = None
+    parts: List[int] = field(default_factory=list)   # other token indices folded into this
+                                                     # entity (multiword lemma, name, number words)
     head: Optional[str] = None      # set by the serializer: the head token chosen at the first
                                     # mention, so every re-mention names the same sense
 

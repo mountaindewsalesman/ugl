@@ -107,10 +107,17 @@ class Tok:
         return f"{self.form}/{self.upos}/{self.deprel}"
 
 
+# unit symbols -> the dictionary's word for the unit
+SYMBOL_LEMMA = {"°c": "degree Celsius", "°f": "degree Fahrenheit", "°k": "kelvin", "°": "degree",
+                "%": "percent"}
+
+
 def lemmatize(t, toks):
     if t.lemma:
         return t.lemma
     w = t.lower
+    if w in SYMBOL_LEMMA:
+        return SYMBOL_LEMMA[w]
     if w in CLITIC_LEMMA:
         return CLITIC_LEMMA[w]
     if w in ("'s", "’s") and t.upos == "AUX":
@@ -197,6 +204,29 @@ def restructure(toks):
         k.kids.sort(key=lambda x: x.i)
 
 
+def name_parts(t):
+    """All words of the multiword name headed by t, nested ones included:
+    "United" in "United Nations Security Council" hangs off "Nations"."""
+    out = []
+    for c in t.kids:
+        if c.deprel in ("flat", "flat:name", "compound") and c.upos == "PROPN":
+            out += [c] + name_parts(c)
+        elif c.deprel == "amod" and c.upos in ("ADJ", "PROPN") and c.form[:1].isupper() and c.i < t.i \
+                and t.deprel in ("flat", "flat:name", "compound"):
+            out.append(c)                        # capitalised adjective inside the name: "United"
+    return out
+
+
+def compound_chain(c):
+    """c with the compound / adjective modifiers stacked on it ("glass" in
+    "glass transition temperature")."""
+    out = [c]
+    for k in c.kids:
+        if k.deprel in ("compound", "amod") and k.upos in ("NOUN", "ADJ", "PROPN", "X"):
+            out += compound_chain(k)
+    return out
+
+
 def subtree_start(t):
     """First word of t's phrase (punctuation not counted)."""
     return min([t.i] + [subtree_start(k) for k in t.kids if k.deprel != "punct"])
@@ -281,6 +311,9 @@ class Analyzer:
         cop = v.dep1("cop")
         ev = Event(pred="verb", lemma=v.lemma, pos=v.i)
         passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass", "obl:agent"))
+        if (not passive and v.xpos == "VBN" and v.deprel in ("advcl", "acl") and inherit_subj is not None
+                and not v.dep("aux", "nsubj", "expl", "csubj", "obj")):
+            passive = True                       # "flows if heated": the subject is what gets heated
         ev.passive = passive
 
         # ---- predicate type
@@ -323,12 +356,19 @@ class Analyzer:
         agent = next((o for o in v.dep("obl", "obl:agent")
                       if any(c.lower == "by" for c in o.dep("case"))), None) if passive else None
         if passive:
-            ev.obj = self.entity(psubj) if psubj is not None else ev.obj
+            ev.obj = (self.entity(psubj) if psubj is not None
+                      else refer(inherit_subj) if inherit_subj is not None else ev.obj)
             ev.subj = self.entity(agent) if agent is not None else (inherit_subj and Entity("reserved", "n4")) or Entity("reserved", "n4")
         elif subj is not None and subj.deprel == "expl":
             ev.subj = None   # "there is X": X arrives as nsubj in UD, handled below
             real = v.dep1("nsubj")
-            ev.subj = self.entity(real) if real is not None and real is not subj else Entity("reserved", "n3", det="t")
+            clause = v.dep1("csubj", "csubj:pass")
+            if real is not None and real is not subj:
+                ev.subj = self.entity(real)
+            elif clause is not None:             # "it will take me a while [to read it]": the clause is the subject
+                ev.subj = Entity("reserved", "n3", det="t", restrictors=[self.clause(clause)])
+            else:
+                ev.subj = Entity("reserved", "n3", det="t")
         elif subj is not None and subj.deprel == "csubj":
             ev.subj = Entity("reserved", "n3", det="t", restrictors=[self.clause(subj)])
         elif subj is not None:
@@ -595,15 +635,23 @@ class Analyzer:
             if e.kind == "reserved":                   # "someone who can help", "something new"
                 self.np_mods(t, e)
             return e
+        if t.lower in SYMBOL_LEMMA:
+            e = Entity("lex", t.lemma, pos=t.i, plural=False)
+            self.np_mods(t, e)
+            return e
         if t.upos == "NUM" or (t.xpos == "CD"):
             parts = number_parts(t)
-            e = Entity("num", number_literal(t, parts), pos=t.i)
+            e = Entity("num", number_literal(t, parts), pos=t.i, parts=[p.i for p in parts])
             self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e
         if t.upos == "PROPN":
-            parts = [c for c in t.dep("flat", "compound") if c.upos == "PROPN"]
+            parts = name_parts(t)
+            idx = {p.i for p in parts} | {t.i}
+            for p in [t] + parts:                # a capitalised adjective right before a name word: "United"
+                parts += [c for c in p.dep("amod") if c.form[:1].isupper() and c.i + 1 in idx and c not in parts]
             span = sorted(parts + [t], key=lambda x: x.i)
-            e = Entity("name", " ".join(x.form for x in span), pos=t.i, is_person=False)
+            e = Entity("name", " ".join(x.form for x in span), pos=t.i, is_person=False,
+                       parts=[x.i for x in span])
             self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e
         e = Entity("lex", t.lemma, pos=t.i)
@@ -617,6 +665,7 @@ class Analyzer:
             joined = " ".join([c.lemma for c in comps] + [t.lemma])
             if self.lex.senses(joined, "n"):
                 e.lemma, skip = joined, set(id(c) for c in comps)
+                e.parts = [c.i for c in comps]
         e.is_person = self.lex.in_class(e.lemma, "person")
         self.np_mods(t, e, skip)
         return e
@@ -692,13 +741,17 @@ class Analyzer:
                     e.attrs.append(self.attr(c))
             elif d == "nummod":
                 e.count = number_literal(c, number_parts(c))
+                for a in c.dep("advmod"):              # "about 100", "nearly 50": kept as an adverb
+                    e.attrs.append(self.attr(a))
             elif d == "compound":
                 if c.upos == "PROPN":
                     e.attrs.append(Attr(c.form, "name", "", c.i))
                 elif c.upos == "NUM":
                     e.attrs.append(Attr(number_literal(c), "num", "", c.i))
                 elif c.upos in ("NOUN", "ADJ", "X"):
-                    e.attrs.append(Attr(c.lemma, "noun" if c.upos != "ADJ" else "adj", "", c.i))
+                    # the modifier's own compounds come first: glass -> transition -> temperature
+                    for k in sorted(compound_chain(c), key=lambda x: x.i):
+                        e.attrs.append(Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i))
             elif d == "nmod:poss":
                 e.possessor = self.entity(c)
             elif d in ("nmod", "nmod:tmod", "nmod:npmod"):

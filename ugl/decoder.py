@@ -431,7 +431,10 @@ class Decoder:
             noun = inflect(noun, "VBG")
         elif h.kind == "word" and plural:
             noun = inflect(noun, "NNS")
-        pre = [self.adj(a) for a in np.adjs] + [self.lemma(c.head) for c in np.comps]
+        # an adverb in a counted phrase modifies the number: "about 100 degrees"
+        lead = [self.adj(a) for a in np.adjs if np.nums and self.is_adverb_sense(a)]
+        pre = ([self.adj(a) for a in np.adjs if not (np.nums and self.is_adverb_sense(a))]
+               + [self.lemma(c.head) for c in np.comps])
         # "tens of kilometers": a plural round number counts in units of itself
         nums = [self.lemma(n) + (" of" if self.lemma(n).endswith("s") and not self.lemma(n)[0].isdigit() else "")
                 for n in np.nums]
@@ -467,7 +470,7 @@ class Decoder:
         elif h.kind == "word" and not plural and not nums and not self.lex.is_proper(h.raw):
             first = (pre[0] if pre else noun)
             det = "an" if VOWEL.match(first) else "a"
-        words = [det] + nums + pre + [noun, of_part]
+        words = [det] + lead + nums + pre + [noun, of_part]
         for r in np.rels:
             sub = Ctx()
             sub.gap = h.base

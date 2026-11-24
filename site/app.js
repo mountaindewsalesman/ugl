@@ -173,7 +173,13 @@ function renderResults(data) {
     }
     const hit = sourceOf(s.ugl);
     if (hit) {
-      rows.unshift(el("div", { class: "row" }, el("span", { class: "tag" }, "ENGLISH"), el("span", { class: "source" }, hit[1])));
+      // a long sentence split by the simplifier: say which part this line is
+      const parts = state.sources.filter((x) => x[1] === hit[1]);
+      const k = parts.indexOf(hit) + 1;
+      const note = parts.length > 1
+        ? el("span", { class: "part" }, ` (part ${k} of ${parts.length}: ${k === 1 ? "main statement" : "split off as its own statement"})`)
+        : null;
+      rows.unshift(el("div", { class: "row" }, el("span", { class: "tag" }, "ENGLISH"), el("span", {}, el("span", { class: "source" }, hit[1]), note)));
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "CHECK"), hit[2].length
         ? el("ul", { class: "issues" }, hit[2].map((x) => el("li", {}, x)))
         : el("span", { class: "ok" }, "no known problems")));
