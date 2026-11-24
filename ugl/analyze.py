@@ -403,14 +403,18 @@ class Analyzer:
         members = [e] + [self.head_entity(c) for c in conj]
         return Entity("coord", members=members, logic=CC.get(cc.lower if cc else "and", "and"), pos=e.pos)
 
+    QUANT_OF = {"all": "all", "each": "all", "both": "all", "every": "all", "most": "most",
+                "many": "many", "few": "few"}
+
     def head_entity(self, t):
+        # "all/most/many of X": the quantifier ranges over X, whatever tag the parser gave the word
+        of = next((c for c in t.dep("nmod", "obl") if any(k.lower == "of" for k in c.dep("case"))), None)
+        if t.lower in self.QUANT_OF and of is not None:
+            inner = self.entity(of)
+            inner.quant = self.QUANT_OF[t.lower]
+            return inner
         if t.upos == "PRON" or (t.upos == "DET" and t.deprel not in ("det",)):
             e = self.pronoun(t)
-            of = next((c for c in t.dep("nmod") if any(k.lower == "of" for k in c.dep("case"))), None)
-            if e.kind == "reserved" and e.quant and of is not None:
-                inner = self.entity(of)                # "all of my wine": the quantifier ranges over my wine
-                inner.quant = e.quant
-                return inner
             if e.kind == "reserved":                   # "someone who can help", "something new"
                 self.np_mods(t, e)
             return e
@@ -468,8 +472,10 @@ class Analyzer:
             return Entity("reserved", "n3", neg=True)
         if w in ("nobody", "noone", "no-one"):
             return Entity("reserved", "n4", neg=True)
-        if w in ("everything", "everyone", "everybody", "all", "each"):
+        if w in ("everything", "everyone", "everybody", "all", "each", "both"):
             return Entity("reserved", "n4" if w.startswith("every") and w != "everything" else "n3", quant="all")
+        if w in ("most", "many", "few"):               # "most of these wars": quantifier over the of-phrase
+            return Entity("reserved", "n3", quant=QUANT[w])
         # third-person personal / possessive / reflexive: coreference decides
         e = Entity("pronoun", w, pos=t.i, person=3, plural=plural, gender=t.f("Gender"))
         return e

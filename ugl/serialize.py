@@ -67,7 +67,8 @@ class Serializer:
             return self.np(e.members[0], quants)       # only reached for coordinated possessors etc.
         if e.kind == "pronoun":                          # unresolved and not handled by coref
             return ["n3t"]
-        mods = ("s" if e.plural else "") + (e.det if not e.quant else "") + ("x" if e.neg else "") + ("q" if e.question else "")
+        mods = ("s" if e.plural else "") + (e.det if (not e.quant or e.det in "de") else "") \
+            + ("x" if e.neg else "") + ("q" if e.question else "")
         if e.kind == "reserved":
             head = [add_mods(e.lemma, mods)]
         elif e.kind == "name":
@@ -112,7 +113,8 @@ class Serializer:
             return True
         if e.kind == "coord":
             return all(Serializer.indefinite(m) for m in e.members)
-        return e.ref is None and e.kind == "lex" and not e.det and e.possessor is None
+        # a re-mention inside a restrictor ("speakers [that are] in Slovakia") needs no "be" either
+        return e.ref is not None or (e.kind == "lex" and not e.det and e.possessor is None)
 
     def verb(self, ev):
         if ev.pred in ("be", "exist"):

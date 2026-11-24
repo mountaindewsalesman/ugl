@@ -377,7 +377,14 @@ class Decoder:
         of_part = ""
         quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
         if quant:
+            if quant == "every" and (plural or np.poss is not None or "d" in h.mods or "e" in h.mods):
+                quant = "all"                               # all friends / all my friends / all these
             det = quant
+            if np.poss is not None:                         # "all my friends", "most of John's books"
+                det += (" " if quant == "all" else " of ") + self.np(np.poss, ctx, "poss")
+            elif "d" in h.mods or "e" in h.mods:            # "most of these wars"
+                dem = ("these" if plural else "this") if "d" in h.mods else ("those" if plural else "that")
+                det += (" " if quant == "all" else " of ") + dem
         elif np.poss is not None and (np.poss.head.kind == "name" or np.poss.head.base in RESERVED_NOUN_BASES
                                       or self.lex.is_proper(np.poss.head.raw)):
             det = self.np(np.poss, ctx, "poss")
@@ -485,7 +492,10 @@ class Decoder:
         if isinstance(c, Bare):
             if self.matches(c.np, ctx.gap):
                 return ""
-            return ("there is " if not question else "") + self.np(c.np, ctx, "obj")
+            many = "s" in c.np.head.mods or any(n.raw not in ("#1", "#one") for n in c.np.nums) \
+                or (c.np.head.kind == "num" and c.np.head.raw != "#1")
+            there = "there are " if many else "there is "
+            return (there if not question else "") + self.np(c.np, ctx, "obj")
         if isinstance(c, Logic):
             return self.logic(c, ctx)
         if isinstance(c, Wrap):
