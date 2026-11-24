@@ -64,6 +64,7 @@ PREP = {
     "in favor of": "for", "in favour of": "for", "by means of": "with", "on top of": "on",
     "across from": "across", "amid": "during", "amidst": "during", "versus": "against",
     "vs": "against", "vs.": "against", "unto": "to",
+    "–": "until", "—": "until",          # a range: "February 2025 – February 2026"
 }
 NEGATING = {"without", "unlike"}
 TIME_SENSITIVE = {"at", "in", "on"}        # become "time" when the landmark is a time
@@ -246,6 +247,22 @@ AMOUNT = {"much": ("much", ""), "more": ("much", "r"), "less": ("much", "l"),
           "little": ("little", ""), "enough": ("enough", "")}
 
 
+MONTHS = {m: i + 1 for i, m in enumerate(
+    "january february march april may june july august september october november december".split())}
+MONTHS.update({m[:3]: i for m, i in list(MONTHS.items())})
+MONTHS["sept"] = 9
+DATE_LINKS = ("nummod", "nmod", "compound", "appos", "flat", "nmod:tmod", "obl:tmod", "nmod:npmod", "amod")
+
+
+def date_value(day=None, month=None, year=None):
+    """Canonical date literal: #2025-02-14, #2025-02 (no day), #--02-14 (no year)."""
+    if year and day:
+        return f"#{year}-{month:02d}-{int(day):02d}"
+    if year:
+        return f"#{year}-{month:02d}"
+    return f"#--{month:02d}-{int(day):02d}"
+
+
 def number_parts(t):
     """t and the number words that build it with it ("two hundred thousand")."""
     parts = [k for k in t.kids if k.deprel in ("compound", "flat", "nummod") and
@@ -367,11 +384,16 @@ class Analyzer:
         -> the passive agent's token (its "by" phrase is the subject, not a relation)."""
         subj = v.dep1("nsubj", "csubj", "expl")
         psubj = v.dep1("nsubj:pass", "csubj:pass")
+        # the agent: "by X" where X is not a time ("by 14 February" is a deadline)
         agent = next((o for o in v.dep("obl", "obl:agent")
-                      if any(c.lower == "by" for c in o.dep("case"))), None) if passive else None
+                      if any(c.lower == "by" for c in o.dep("case")) and not self.timeish(o)), None) if passive else None
         if passive:
-            ev.obj = (self.entity(psubj) if psubj is not None
-                      else refer(inherit_subj) if inherit_subj is not None else ev.obj)
+            if psubj is not None and psubj.deprel == "csubj:pass":
+                # "it was reported that X": someone reported [that X] (the clause is what was reported)
+                ev.comps.append(self.clause(psubj))
+            else:
+                ev.obj = (self.entity(psubj) if psubj is not None
+                          else refer(inherit_subj) if inherit_subj is not None else ev.obj)
             ev.subj = self.entity(agent) if agent is not None else (inherit_subj and Entity("reserved", "n4")) or Entity("reserved", "n4")
         elif subj is not None and subj.deprel == "expl":
             ev.subj = None   # "there is X": X arrives as nsubj in UD, handled below
@@ -555,6 +577,31 @@ class Analyzer:
             rel = "time"
         return Rel(rel, land, neg=prep in NEGATING)
 
+    def date_parts(self, t):
+        """If t heads a date ("14 February 2025", "February 14, 2025",
+        "February 2025", "14 February"): (literal, tokens).  Else None."""
+        # (a part with its own preposition or dash is a separate phrase: "– February 2026")
+        part = lambda k: k.deprel in DATE_LINKS and not k.dep("case")
+        toks = [t] + [k for k in t.kids if part(k)]
+        toks += [g for k in toks[1:] for g in k.kids if part(g)]
+        month = [x for x in toks if x.lower.rstrip(".") in MONTHS and x.upos in ("PROPN", "NOUN", "NUM", "X")]
+        nums = [x for x in toks if x.upos == "NUM" and re.fullmatch(r"\d{1,4}(st|nd|rd|th)?", x.lower)]
+        if len(month) != 1 or not nums:
+            return None
+        day = [x for x in nums if len(re.sub(r"\D", "", x.lower)) <= 2 and 1 <= int(re.sub(r"\D", "", x.lower)) <= 31]
+        year = [x for x in nums if len(x.lower) == 4 and x.lower.isdigit()]
+        if len(day) > 1 or len(year) > 1 or len(day) + len(year) != len(nums):
+            return None
+        m = MONTHS[month[0].lower.rstrip(".")]
+        lit = date_value(re.sub(r"\D", "", day[0].lower) if day else None, m, year[0].lower if year else None)
+        return lit, month + nums
+
+    def timeish(self, t):
+        """Does token t head a time expression (a number, a date, a time noun)?"""
+        if t.upos == "NUM" or self.date_parts(t) is not None:
+            return True
+        return self.lex.in_class(t.lemma, "time") or self.lex.in_class(t.lower, "time")
+
     def is_time(self, k, ent):
         if ent.kind == "num":
             return True
@@ -670,6 +717,12 @@ class Analyzer:
     def head_entity(self, t):
         # "all/most/many of X": the quantifier ranges over X, whatever tag the parser gave the word
         of = next((c for c in t.dep("nmod", "obl") if any(k.lower == "of" for k in c.dep("case"))), None)
+        dp = self.date_parts(t)
+        if dp is not None:                           # one canonical time literal for a date
+            lit, used = dp
+            e = Entity("num", lit, pos=t.i, parts=[x.i for x in used])
+            self.np_mods(t, e, skip=set(id(x) for x in used))
+            return e
         if t.lower in self.QUANT_OF and of is not None:
             inner = self.entity(of)
             inner.quant = self.QUANT_OF[t.lower]
@@ -817,6 +870,7 @@ class Analyzer:
                     e.quant = QUANT[w]
                 elif c.f("Poss") == "Yes" or c.upos == "PRON":
                     e.possessor = self.pronoun(c)
+                    e.det = e.det or "t"               # "his book" is a definite book
                 elif w in ("another", "other"):
                     e.attrs.append(Attr("other", "adj", "", c.i))
             elif d == "amod":
@@ -847,6 +901,7 @@ class Analyzer:
                         e.attrs.append(Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i))
             elif d == "nmod:poss":
                 e.possessor = self.entity(c)
+                e.det = e.det or "t"                   # "the river's bank" is a definite bank
             elif d in ("nmod", "nmod:tmod", "nmod:npmod"):
                 r = self.rel_from_case(c)
                 if r.rel == "of" and e.possessor is None:

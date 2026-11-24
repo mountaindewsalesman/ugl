@@ -261,7 +261,7 @@ FAMILIES_4 = [
     # "as" without a subject of its own is a role, not a cause
     ("It was shown as extending to the river.", lambda u, e: "because" not in e),
     # multiword prepositions, whatever the parser tags their first word
-    ("Thawai was a village prior to independence.", lambda u, e: "before" in e),
+    ("Thawai was a village prior to independence.", lambda u, e: "before" in e.lower()),
     # "Paris, France": a place inside the next one
     ("He was born in Paris, France.", lambda u, e: "in France" in e),
 ]
@@ -295,3 +295,33 @@ def test_families_5():
         if not ok(u, e):
             fails.append(f"{en!r} -> {u!r} -> {e!r}")
     assert not fails, "\n".join(fails)
+
+
+FAMILIES_6 = [
+    # dates: one canonical literal however English phrases them
+    ("He was born on March 3, 1990.", lambda u, e: "#1990-03-03" in u),
+    ("He was born on 3 March 1990.", lambda u, e: "#1990-03-03" in u),
+    ("The violence lasted from February 2025 – February 2026.", lambda u, e: "#2025-02" in u and "#2026-02" in u),
+    # reported clauses survive the passive; "by <date>" is not an agent
+    ("By 14 February, it was reported that the houses had burned.", lambda u, e: "houses" in e and "#--02-14" in u),
+]
+
+
+def test_families_6():
+    fails = []
+    for en, ok in FAMILIES_6:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
+
+
+def test_round_trip_stable():
+    # decode -> encode gives the same UGL back (relations in canonical order,
+    # possessives definite, relation phrases fronted when an object could take them)
+    for en in ("I ate the apple at nine in the kitchen.", "In the kitchen, I ate the apple at nine.",
+               "Simon read his book on the bank of the river.", "This caused an arson of houses."):
+        a = U.encode(en)
+        assert U.encode(U.decode("\n".join(a))) == a, en
+    assert U.encode("I ate the apple at nine in the kitchen.") == U.encode("In the kitchen, I ate the apple at nine.")

@@ -137,10 +137,21 @@ ROUND_NUMBERS = {10: "ten", 12: "dozen", 20: "score", 100: "hundred", 1000: "tho
                  10**6: "million", 10**9: "billion"}
 
 
+MONTH_NAMES = ("January February March April May June July August September October "
+               "November December").split()
+
+
 def number_text(raw):
     """Number literal -> English: "#9" -> "9", "#10s" -> "tens" (an amount
-    counted in tens), "#1000s" -> "thousands"."""
+    counted in tens), "#1000s" -> "thousands"; dates: "#2025-02-14" ->
+    "14 February 2025", "#2025-02" -> "February 2025", "#--02-14" -> "14 February"."""
     body = raw[1:]
+    m = re.fullmatch(r"(\d{4}|-)-(\d\d)(?:-(\d\d))?", body)
+    if m and 1 <= int(m.group(2)) <= 12:
+        month = MONTH_NAMES[int(m.group(2)) - 1]
+        day = str(int(m.group(3))) + " " if m.group(3) else ""
+        year = " " + m.group(1) if m.group(1) != "-" else ""
+        return f"{day}{month}{year}"
     if body.endswith("s") and body[:-1].isdigit() and int(body[:-1]) in ROUND_NUMBERS:
         return ROUND_NUMBERS[int(body[:-1])] + "s"
     return body.replace("_", " ")

@@ -452,11 +452,8 @@ class Decoder:
                 det += (" " if quant == "all" else " of ") + dem
             elif "t" in h.mods:                             # "all the dogs", "most of the apples"
                 det += (" " if quant == "all" else " of ") + "the"
-        elif np.poss is not None and self.namelike(np.poss):
-            det = self.np(np.poss, ctx, "poss")
-        elif np.poss is not None:
-            det = "the"
-            of_part = "of " + self.np(np.poss, ctx, "obj")
+        elif np.poss is not None and self.namelike(np.poss) and "t" in h.mods:
+            det = self.np(np.poss, ctx, "poss")          # "Simon's book" (a possessive is definite)
         elif "q" in h.mods:
             det = "which"
         elif "x" in h.mods:
@@ -470,6 +467,8 @@ class Decoder:
         elif h.kind == "word" and not plural and not nums and not self.lex.is_proper(h.raw):
             first = (pre[0] if pre else noun)
             det = "an" if VOWEL.match(first) else "a"
+        if np.poss is not None and not det.endswith("'s") and not det.endswith("'") and not quant:
+            of_part = "of " + self.np(np.poss, ctx, "obj")   # "the bank of the river", "an arson of houses"
         words = [det] + lead + nums + pre + [noun, of_part]
         for r in np.rels:
             sub = Ctx()
@@ -609,8 +608,16 @@ class Decoder:
         if self.matches(c.land, ctx.gap):          # "the house in which I live"
             inner = self.clause(c.body, Ctx(), question)
             return f"{self.preposition(c)} which {inner}"
+        rel = self.relation(c, ctx)
         body = self.clause(c.body, ctx, question)
-        return f"{body} {self.relation(c, ctx)}".strip()
+        core = c.body
+        while isinstance(core, Wrap) and VERB_KIND.get(core.rel.idx) != "quant":
+            core = core.body                          # stacked relations: look at the clause inside
+        if isinstance(core, Core) and core.obj is not None and not question:
+            # "Simon read his book on the bank": a final phrase could attach to the
+            # object; in front it can only modify the clause, as it does in UGL
+            return f"{rel}, {body}"                  # (the sentence start is capitalised once, at the end)
+        return f"{body} {rel}".strip()
 
     def preposition(self, c):
         r = c.rel.idx

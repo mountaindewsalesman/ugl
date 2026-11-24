@@ -175,7 +175,9 @@ class Serializer:
         if ev.pred in ("be", "exist") and ev.manner:
             way = Entity("reserved", "n7", attrs=list(ev.manner))
             out = self.np(way, quants) + [tok("v", V["with"])] + out + [f"\\v{V['with']}"]
-        for r in reversed(ev.rels):
+        # stacked relations all modify the same clause, so their order carries no
+        # meaning: a canonical order (by relation number) gives one UGL per meaning
+        for r in reversed(sorted(ev.rels, key=lambda r: V[r.rel])):
             i = V[r.rel]
             if isinstance(r.landmark, Event):
                 out = [tok("v", i, "x" if r.neg else "")] + self.clause(r.landmark) + [f"\\v{i}"] + out + [f"\\v{i}"]
