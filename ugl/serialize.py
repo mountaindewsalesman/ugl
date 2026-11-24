@@ -37,7 +37,9 @@ class Serializer:
         if e.kind == "coord":                            # "they" = the same group again
             return self.coordinated([self.mention(m) for m in e.members], e.logic)
         if e.kind == "lex":
-            head = self.word(e.lemma, "v" if e.cls == "nv" else "n", pos=e.pos)[0]
+            # the sense was chosen where the entity was introduced (maybe in an
+            # earlier sentence, whose words are no longer the context)
+            head = e.head or self.word(e.lemma, "v" if e.cls == "nv" else "n")[0]
             m = WORD.match(head)
             if m:
                 cls = "nv" if e.cls == "nv" else m.group(1)
@@ -80,6 +82,7 @@ class Serializer:
             if e.cls == "nv" and toks[0].startswith("v"):
                 toks[0] = "nv" + toks[0][1:]
             head = toks
+            e.head = toks[0]
         out = list(head)
         for a in e.attrs:
             out += self.attr(a)

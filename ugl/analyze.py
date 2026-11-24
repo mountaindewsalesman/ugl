@@ -20,7 +20,10 @@ except ImportError:  # pragma: no cover
 
 # ------------------------------------------------------------------ tables
 MODALS = {"will": "f", "shall": "f", "would": "h", "can": "c", "could": "ch", "may": "m",
-          "might": "mh", "must": "u", "should": "uh", "ought": "uh"}
+          "might": "mh", "must": "u", "should": "uh", "ought": "uh",
+          # semi-modals, after restructure() has turned them into auxiliaries
+          "have to": "u", "have got to": "u", "be able to": "c", "be going to": "f",
+          "be supposed to": "uh"}
 CLITIC_LEMMA = {"n't": "not", "'m": "be", "'re": "be", "'ve": "have", "'ll": "will", "wo": "will",
                 "ca": "can", "sha": "shall", "gon": "go", "na": "to", "ta": "to"}
 NUM_WORDS = {w: i for i, w in enumerate(
@@ -130,7 +133,71 @@ def build_tokens(sent):
             toks[t.head].kids.append(t)
     for t in toks:
         t.lemma = lemmatize(t, toks)
+    restructure(toks)
     return toks
+
+
+# ------------------------------------------------------------------ tree normalisation
+def semi_modal(v):
+    """'have to X', 'is able to X', 'is going to X', 'is supposed to X':
+    -> (the MODALS key, the xcomp X) when v heads such a construction, else None.
+    These mean what a modal means (have to = must), so they get its letter, not a verb."""
+    k = next((x for x in v.dep("xcomp") if x.upos in ("VERB", "AUX")
+              and any(m.lower == "to" for m in x.dep("mark"))), None)
+    if k is None or v.dep("obj", "ccomp"):
+        return None
+    aux = {a.lemma for a in v.dep("aux", "aux:pass", "cop")}
+    if v.lemma == "have" and v.upos in ("VERB", "AUX"):
+        return "have to", k
+    if v.lemma == "get" and v.xpos == "VBN" and "have" in aux:
+        return "have got to", k
+    if v.lemma == "able" and "be" in aux:
+        return "be able to", k
+    if v.lemma == "go" and v.xpos == "VBG" and "be" in aux:
+        return "be going to", k
+    if v.lemma == "suppose" and v.xpos == "VBN" and "be" in aux:
+        return "be supposed to", k
+    return None
+
+
+def restructure(toks):
+    """Rewrite constructions into the one shape the analyzer reads, so each
+    meaning has one code path.  Semi-modals become auxiliaries of their verb,
+    exactly as UD already attaches real modals ("must go"):
+        She has to leave  ->  leave <-aux- has(lemma "have to")"""
+    for v in toks:
+        sm = semi_modal(v)
+        if sm is None:
+            continue
+        key, k = sm
+        # k takes v's place in the tree
+        k.head, k.deprel = v.head, v.deprel
+        if v.head >= 0:
+            sib = toks[v.head].kids
+            sib[sib.index(v)] = k
+        for c in v.kids:
+            if c is k:
+                continue
+            c.head = k.i
+            if c.deprel in ("cop", "aux:pass"):          # "is (able)": carries tense; now an aux of X
+                c.deprel = "aux"
+            if c.deprel == "aux" and c.lemma == "have" and key == "have got to":
+                c.deprel = "fixed"                       # part of the semi-modal, not perfect aspect
+            k.kids.append(c)
+        if k.dep("aux:pass"):
+            for c in k.dep("nsubj"):
+                c.deprel = "nsubj:pass"                  # "has to be told": the subject is the patient
+        for m in k.dep("mark"):
+            if m.lower == "to":
+                m.deprel = "fixed"
+        v.kids, v.head, v.deprel, v.lemma = [], k.i, "aux", key
+        k.kids.append(v)
+        k.kids.sort(key=lambda x: x.i)
+
+
+def subtree_start(t):
+    """First word of t's phrase (punctuation not counted)."""
+    return min([t.i] + [subtree_start(k) for k in t.kids if k.deprel != "punct"])
 
 
 def number_literal(t):
@@ -168,6 +235,7 @@ class Analyzer:
         cop = v.dep1("cop")
         ev = Event(pred="verb", lemma=v.lemma, pos=v.i)
         passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass", "obl:agent"))
+        ev.passive = passive
 
         # ---- predicate type
         nominal = v.upos not in ("VERB", "AUX") or cop is not None
@@ -551,11 +619,21 @@ class Analyzer:
                 else:
                     e.restrictors.append(Event(pred="exist", subj=refer(e), rels=[r]))
             elif d == "appos":
-                e.restrictors.append(Event(pred="be", lemma="be", subj=refer(e), obj=self.entity(c)))
+                e.restrictors.append(Event(pred="be", lemma="be", subj=refer(e), obj=self.entity(c),
+                                           aside=self.after_comma(c)))
             elif d == "acl:relcl":
                 e.restrictors.append(self.relative(c, e))
+                e.restrictors[-1].aside = self.after_comma(c)
             elif d == "acl":
                 e.restrictors.append(self.participle(c, e))
+                e.restrictors[-1].aside = self.after_comma(c)
+
+    def after_comma(self, c):
+        """Is phrase c set off by a comma right before it ("my mother, who lives
+        in Ohio," / "Paris, the capital,")?  Then it is non-restrictive: a
+        separate statement about its head, not part of what picks the head out."""
+        start = subtree_start(c)
+        return start > 0 and self.toks[start - 1].lower in (",", ";", "(", "—", "–")
 
     def relative(self, c, head):
         """acl:relcl.  Relative words (who/which/that, and where/when/why) are

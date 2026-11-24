@@ -42,6 +42,8 @@ class Entity:
     gender: Optional[str] = None
     is_person: bool = False
     pos: Optional[int] = None
+    head: Optional[str] = None      # set by the serializer: the head token chosen at the first
+                                    # mention, so every re-mention names the same sense
 
     def root(self):
         e = self
@@ -76,3 +78,7 @@ class Event:
     comps: List["Event"] = field(default_factory=list)      # clause complements (say that ..., want to ...)
     rels: List[Rel] = field(default_factory=list)           # wrapped around the clause, outermost first
     coord: List[tuple] = field(default_factory=list)        # (logic name, Event)
+    passive: bool = False             # English said it in the passive: obj was the surface subject
+                                      # (UGL has no passive; coreference salience still needs it)
+    aside: bool = False               # a restrictor set off by commas ("Ann, who lives here,"):
+                                      # it adds a fact about its head instead of picking it out

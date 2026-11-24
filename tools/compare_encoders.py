@@ -28,6 +28,7 @@ from ugl.coref import resolve  # noqa: E402
 from ugl.encoder import Encoder  # noqa: E402
 from ugl.parser.conllu import read_conllu  # noqa: E402
 from ugl.serialize import Serializer  # noqa: E402
+from ugl.simplify import split  # noqa: E402
 
 
 def f1(a, b):
@@ -45,7 +46,7 @@ def encode_tree(lex, tree, words, question):
     try:
         ev = an.sentence(tree, question=question)
         resolve([ev])
-        return se.sentence(ev, words), None
+        return chr(10).join(se.sentence(part, words) for part in split(ev)), None
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 

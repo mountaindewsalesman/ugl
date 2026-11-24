@@ -50,7 +50,29 @@ CASES = [
     ("We will have eaten.", [r"^n1s v\d+fk$"]),
     ("Did you eat?", [r"^n2 v\d+pq$"]),
     ("The man who left saw me.", [r"v3 n(\d+)t v\d+p \\v3", r"v\d+p n1$"]),
+    # semi-modals carry the modal letter, not a verb ("have to" = must)
+    ("I have to go.", [r"^n1 v\d+u$"]),
+    ("We had to wait.", [r"^n1s v\d+pu$"]),
+    ("She is able to swim.", [r"^n4 v\d+c$"]),
 ]
+
+
+def test_simplify_splits_asides_and_and():
+    out = ENC.encode("My mother, who lives in Ohio, is ill.")
+    assert len(out) == 2 and "v3" not in out[0], out          # aside became its own sentence
+    out = ENC.encode("The man who left saw me.")
+    assert len(out) == 1 and "v3" in out[0], out              # restrictive clause stays
+    out = ENC.encode("I ate and she slept.")
+    assert len(out) == 2 and "v4" not in " ".join(out), out
+    out = ENC.encode("I ate but she slept.")
+    assert len(out) == 1 and out[0].startswith("v6"), out     # "but" is a relation: kept
+
+
+def test_passive_subject_is_salient():
+    # "it" = the bridge (surface subject of the passive), not the agent
+    a, b = ENC.encode("The bridge was destroyed by the flood. The town rebuilt it.")
+    bridge = re.search(r"(n\d+)t v\d+p (n\d+)t$", a).group(2)
+    assert b.endswith(bridge + "t"), (a, b)
 
 
 def test_cases():

@@ -32,11 +32,13 @@ def mentions(ev, sent_no, out, clause_subj=None):
         for r in e.restrictors:
             mentions(r, sent_no, out)
 
-    subj = ev.subj
-    ent(ev.subj, "subj")
+    # roles follow the English surface: in a passive the patient was the subject
+    # ("The bridge was destroyed by the flood ... it" = the bridge)
+    subj = ev.obj if ev.passive and ev.obj is not None else ev.subj
+    ent(ev.subj, "obl" if ev.passive and ev.obj is not None else "subj")
     clause_subj = subj
     if ev.obj is not None:
-        out.append((ev.obj, "obj", sent_no, subj))
+        out.append((ev.obj, "subj" if ev.passive else "obj", sent_no, subj))
         if ev.obj.possessor is not None:
             out.append((ev.obj.possessor, "poss", sent_no, subj))
         for m in ev.obj.members:

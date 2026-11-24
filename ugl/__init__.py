@@ -19,11 +19,14 @@ class UGL:
     """A dictionary plus the encoder, decoder and tokenizer built on it.
     The parser is only loaded the first time you encode English."""
 
-    def __init__(self, dictionary=None, wsd=True, engine="ugl"):
+    def __init__(self, dictionary=None, wsd=True, engine="ugl", simplify=True):
         """wsd: True = contextual sense model if installed, False = most
         frequent sense, or a path to a centroid file.
-        engine: "ugl" (own numpy parser, default) or "spacy" (legacy)."""
+        engine: "ugl" (own numpy parser, default) or "spacy" (legacy).
+        simplify: split long sentences into simpler ones with the same meaning
+        (top-level "and", comma-set-off clauses); see ugl/simplify.py."""
         self.engine = engine
+        self.simplify = simplify
         self.wsd = None
         self.lexicon = Lexicon(dictionary)
         self.decoder = Decoder(self.lexicon)
@@ -41,7 +44,7 @@ class UGL:
                 self._encoder = SpacyEncoder(self.lexicon)
             else:
                 from .encoder import Encoder
-                self._encoder = Encoder(self.lexicon)
+                self._encoder = Encoder(self.lexicon, simplify=self.simplify)
             if self._want_wsd:
                 self.wsd = _attach_context_wsd(self.lexicon, self._want_wsd)
         return self._encoder
@@ -51,7 +54,8 @@ class UGL:
         return self.lexicon.version
 
     def encode(self, text, keep_memory=False):
-        """English text -> list of UGL sentences."""
+        """English text -> list of UGL sentences (a long English sentence
+        may become several simpler ones; see simplify)."""
         return self.encoder.encode(text, keep_memory=keep_memory)
 
     def decode(self, ugl_text):

@@ -1,7 +1,8 @@
 """English -> UGL with UGL's own parser (pure numpy; runs in Pyodide too).
 
     text --tokenize--> words --parser--> UD tree --analyze--> Event graph
-         --coref (whole document)--> --serialize--> UGL lines
+         --coref (whole document)--> --simplify--> one or more simpler Events
+         --serialize--> UGL lines
 """
 import re
 
@@ -10,6 +11,7 @@ from .coref import resolve
 from .parser.model import ParserModel, DEFAULT_PATH
 from .parser.tokenize import split_sentences, tokenize
 from .serialize import Serializer
+from .simplify import split
 
 _ASIDE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]")
 
@@ -23,12 +25,13 @@ def strip_asides(text):
 
 
 class Encoder:
-    def __init__(self, lexicon, parser=None, strip_parens=True):
+    def __init__(self, lexicon, parser=None, strip_parens=True, simplify=True):
         self.lex = lexicon
         self.parser = parser or ParserModel(DEFAULT_PATH)
         self.analyzer = Analyzer(lexicon)
         self.serializer = Serializer(lexicon)
         self.strip_parens = strip_parens
+        self.simplify = simplify
 
     @property
     def unknown(self):
@@ -59,8 +62,9 @@ class Encoder:
             if ev is None or isinstance(ev, Exception):
                 out.append("n?[unparsed]")
                 continue
-            try:
-                out.append(self.serializer.sentence(ev, words))
-            except Exception:
-                out.append("n?[unserializable]")
+            for part in (split(ev) if self.simplify else [ev]):
+                try:
+                    out.append(self.serializer.sentence(part, words))
+                except Exception:
+                    out.append("n?[unserializable]")
         return out
