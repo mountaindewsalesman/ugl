@@ -38,7 +38,7 @@ pip install -e .[dev]             # + tools to rebuild dictionaries / run tests
 ```
 
 Or straight from GitHub, with no clone needed:
-`pip install git+https://github.com/mountaindewsalesman/ugl.git`  (private repo: needs your GitHub login)
+`pip install git+https://github.com/mountaindewsalesman/ugl.git`
 
 ## Use as a library
 

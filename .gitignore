@@ -19,3 +19,6 @@ ugl/models/*.npz
 # playground build output (tools/build_playground.py)
 _site/
 playground-smoke.json
+.claude/
+data/ud/
+data/*.npz
