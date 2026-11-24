@@ -30,3 +30,9 @@ def affixes(w):
 
 
 AFFIX_KEYS = ["pre2", "suf2", "suf3", "suf4"]
+MAX_CHARS = 20          # characters of a word seen by the character CNN
+
+
+def chars(w):
+    """Characters the character CNN reads (original case kept; digits normalised)."""
+    return list(re.sub(r"\d", "0", w)[:MAX_CHARS]) or ["_"]

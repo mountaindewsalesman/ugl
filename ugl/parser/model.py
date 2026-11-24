@@ -15,7 +15,7 @@ import os
 
 import numpy as np
 
-from .features import AFFIX_KEYS, affixes, norm, shape
+from .features import AFFIX_KEYS, affixes, chars, norm, shape
 from .mst import chu_liu_edmonds
 
 DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "parser-en.npz")
@@ -54,7 +54,25 @@ class ParserModel:
         for k in AFFIX_KEYS:
             parts.append(w[f"emb.{k}"][self._ids(k, [a[k] for a in aff])])
         parts.append(w["emb.shape"][self._ids("shape", [shape(x) for x in words])])
+        if "emb.char" in w:
+            parts.append(self.char_features(words))
         return np.concatenate(parts, axis=1)
+
+    def char_features(self, words):
+        """Character CNN (kernel 3, zero padding), ReLU, max over the word."""
+        E = self.w["emb.char"]
+        W = self.w["char_conv.weight"]                       # (F, E, 3)
+        Wr = W.transpose(0, 2, 1).reshape(W.shape[0], -1)     # (F, 3E), window-major
+        b = self.w["char_conv.bias"]
+        v = self.vocab["char"]
+        out = np.zeros((len(words), W.shape[0]), np.float32)
+        for i, word in enumerate(words):
+            x = E[[v.get(ch, 1) for ch in chars(word)]]       # (L, E)
+            xp = np.concatenate([np.zeros((1, x.shape[1]), np.float32), x,
+                                 np.zeros((1, x.shape[1]), np.float32)])
+            win = np.concatenate([xp[:-2], xp[1:-1], xp[2:]], axis=1)   # (L, 3E)
+            out[i] = np.maximum(win @ Wr.T + b, 0).max(axis=0)
+        return out
 
     def lstm_dir(self, x, layer, rev):
         sfx = f"l{layer}" + ("_reverse" if rev else "")

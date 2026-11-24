@@ -126,7 +126,8 @@ Dictionary 0.1.0 was built from 30M characters of Wikipedia (2.07M words):
 | model | UPOS | UAS | LAS |
 |---|---|---|---|
 | EWT only, CPU (v1) | 96.0 | 86.9 | 83.9 |
-| **EWT + GUM + LinES + ParTUT + Atis, GPU (default)** | **96.1** | **88.9** | **86.0** |
+| EWT + GUM + LinES + ParTUT + Atis, GPU | 96.1 | 88.9 | 86.0 |
+| **+ character CNN word encoder (default)** | **96.2** | **89.3** | **86.3** |
 
 Train with `python tools/train_parser.py` (it uses a CUDA GPU if there is one),
 score with `tools/eval_parser.py`. `tools/compare_encoders.py --gold N` encodes

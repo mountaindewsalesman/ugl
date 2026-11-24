@@ -27,7 +27,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ugl.parser.conllu import read_conllu
-from ugl.parser.features import AFFIX_KEYS, affixes, norm, shape
+from ugl.parser.features import AFFIX_KEYS, MAX_CHARS, affixes, chars, norm, shape
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UD = os.path.join(ROOT, "data", "ud")
@@ -66,14 +66,17 @@ def pretrained(train_forms, n_max=60000, dim=128):
 
 class Net(nn.Module):
     def __init__(self, sizes, pre_table, wdim=100, adim=32, sdim=16, hidden=200, layers=2,
-                 arc=400, lab=100, n_lab=40, drop=0.33):
+                 arc=400, lab=100, n_lab=40, drop=0.33, cdim=32, cfilters=100):
         super().__init__()
+        # character CNN: reads the word's letters (rare words, names, -ology, -ized)
+        self.char_emb = nn.Embedding(sizes["char"], cdim, padding_idx=0)
+        self.char_conv = nn.Conv1d(cdim, cfilters, kernel_size=3, padding=1)
         self.emb = nn.ModuleDict({"word": nn.Embedding(sizes["word"], wdim, padding_idx=0),
                                   "shape": nn.Embedding(sizes["shape"], sdim, padding_idx=0)})
         for k in AFFIX_KEYS:
             self.emb[k] = nn.Embedding(sizes[k], adim, padding_idx=0)
         self.pre = nn.Embedding.from_pretrained(torch.tensor(pre_table), freeze=True, padding_idx=0)
-        din = wdim + pre_table.shape[1] + len(AFFIX_KEYS) * adim + sdim
+        din = wdim + pre_table.shape[1] + len(AFFIX_KEYS) * adim + sdim + cfilters
         self.lstm = nn.LSTM(din, hidden, num_layers=layers, bidirectional=True, batch_first=True, dropout=drop)
         d = 2 * hidden
         self.root = nn.Parameter(torch.randn(d) * 0.1)
@@ -91,6 +94,7 @@ class Net(nn.Module):
     def forward(self, b):
         parts = [self.emb["word"](b["word"]), self.pre(b["pre"])]
         parts += [self.emb[k](b[k]) for k in AFFIX_KEYS] + [self.emb["shape"](b["shape"])]
+        parts.append(self.char_features(b["chars"]))
         x = self.drop(torch.cat(parts, -1))
         h, _ = self.lstm(x)
         h = self.drop(h)
@@ -102,6 +106,15 @@ class Net(nn.Module):
         ld = self.drop(F.relu(self.lab_dep(H)))
         lh = self.drop(F.relu(self.lab_head(H)))
         return h, S, ld, lh
+
+    def char_features(self, c):
+        # c: (B, n, L) char ids, 0 = pad -> (B, n, F) max over valid positions
+        B, n, L = c.shape
+        e = self.char_emb(c.view(B * n, L)).transpose(1, 2)        # (Bn, E, L)
+        h = F.relu(self.char_conv(e))                              # (Bn, F, L)
+        h = h.masked_fill(c.view(B * n, 1, L).eq(0), -1e4)
+        h = h.max(-1).values.clamp(min=0)                          # empty words -> 0
+        return h.view(B, n, -1)
 
     def label_scores(self, ld, lh, heads):
         # ld, lh: (B, n+1, a); heads: (B, n+1) -> (B, n+1, L)
@@ -117,6 +130,7 @@ def encode_sent(s, voc):
     e = {"word": ids("word", n), "pre": ids("pre", n), "shape": ids("shape", [shape(t["form"]) for t in s])}
     for k in AFFIX_KEYS:
         e[k] = ids(k, [a[k] for a in aff])
+    e["chars"] = [[voc["char"].get(ch, 1) for ch in chars(t["form"])] for t in s]
     e["upos"] = ids("upos", [t["upos"] for t in s])
     e["xpos"] = [IGNORE if t["xpos"] is None else voc["xpos"].get(t["xpos"], 1) for t in s]
     e["feats"] = ids("feats", [t["feats"] for t in s])
@@ -137,6 +151,12 @@ def batchify(encs, word_drop=0.0, word_freq=None):
     n = max(len(e["word"]) for e in encs)
     B = {}
     for k in encs[0]:
+        if k == "chars":
+            B[k] = torch.zeros(len(encs), n, MAX_CHARS, dtype=torch.long)
+            for i, e in enumerate(encs):
+                for j, cs in enumerate(e[k]):
+                    B[k][i, j, : len(cs)] = torch.tensor(cs)
+            continue
         B[k] = torch.zeros(len(encs), n, dtype=torch.long)
         for i, e in enumerate(encs):
             B[k][i, : len(e[k])] = torch.tensor(e[k])
@@ -178,7 +198,9 @@ def export(net, vocabs, path):
     sd = {k: v.detach().cpu().numpy() for k, v in net.state_dict().items()}
     out = {}
     for k, v in sd.items():
-        if k.startswith("emb."):
+        if k == "char_emb.weight":
+            out["emb.char"] = v
+        elif k.startswith("emb."):
             out[k.replace(".weight", "")] = v
         elif k == "pre.weight":
             out["emb.pre"] = v
@@ -189,6 +211,38 @@ def export(net, vocabs, path):
             "treebanks": TREEBANKS}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez_compressed(path, meta=np.array(json.dumps(meta)), **out)
+
+
+def parity_check(net, vocabs, path, sents, n=60):
+    """The exported numpy model must predict what the torch model predicts
+    (UPOS tags and greedy heads) on the same sentences; fp16 rounding aside."""
+    from ugl.parser.model import ParserModel
+    m = ParserModel(path)
+    voc = {k: {s: i for i, s in enumerate(v)} for k, v in vocabs.items()}
+    net.eval()
+    same_u = same_h = tot = 0
+    with torch.no_grad():
+        for sent in sents[:n]:
+            b = batchify([encode_sent(sent, voc)])
+            h, S, _, _ = net(b)
+            tu = net.upos(h).argmax(-1)[0].tolist()
+            th = S[0, 1:, :].argmax(-1).tolist()
+            words = [t["form"] for t in sent]
+            Hs = m.encode(words)
+            nu = m.lin("upos", Hs).argmax(1).tolist()
+            H = np.concatenate([m.w["root"][None, :], Hs])
+            dep, head = m.mlp("arc_dep", H), m.mlp("arc_head", H)
+            Sn = dep @ m.w["arc_W"] @ head.T + (head @ m.w["arc_u"])[None, :]
+            nh = Sn[1:].argmax(1).tolist()
+            for a, b_ in zip(tu, nu):
+                same_u += a == b_
+            for a, b_ in zip(th, nh):
+                same_h += a == b_
+            tot += len(words)
+    net.train()
+    print(f"parity numpy vs torch on {n} sentences: UPOS {same_u/tot:.4f}  heads {same_h/tot:.4f}", flush=True)
+    if same_u / tot < 0.995 or same_h / tot < 0.99:
+        raise SystemExit("numpy inference does not match the trained model")
 
 
 def main():
@@ -230,7 +284,8 @@ def main():
     print(f"{len(train)} train sentences, {len(toks)} tokens", flush=True)
 
     vocabs = {"word": build_vocab([norm(t["form"]) for t in toks], 2),
-              "shape": build_vocab([shape(t["form"]) for t in toks])}
+              "shape": build_vocab([shape(t["form"]) for t in toks]),
+              "char": build_vocab([ch for t in toks for ch in chars(t["form"])], 2)}
     for k in AFFIX_KEYS:
         vocabs[k] = build_vocab([affixes(t["form"])[k] for t in toks], 3)
     for k in ("upos", "xpos", "feats", "deprel"):
@@ -288,7 +343,9 @@ def main():
     print(f"TEST  UPOS {up:.4f}  UAS {ua:.4f}  LAS {la:.4f}  (greedy heads)", flush=True)
     global TREEBANKS
     TREEBANKS = [os.path.basename(f).split("-ud-")[0] for f in files]
+    DEVICE = torch.device("cpu")
     export(net.cpu(), vocabs, a.out)
+    parity_check(net, vocabs, a.out, dev)
     print("saved", a.out, f"{os.path.getsize(a.out)/1e6:.1f} MB", flush=True)
 
 
