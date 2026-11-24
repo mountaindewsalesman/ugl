@@ -91,7 +91,7 @@ footer { color: var(--muted); font-size: .85rem; }
       <tr><td>Parser accuracy (EWT test, labelled attachment)</td><td class="num">not measured on UD</td><td class="num">same</td><td class="num">86.3%</td><td class="num win">91.1%</td></tr>
       <tr><td>UGL from predicted vs hand-annotated trees (exact)</td><td class="num">n/a</td><td class="num">n/a</td><td class="num">44.9%</td><td class="num win">56.2%</td></tr>
       <tr><td>Meaning layer</td><td>~40 rules writing UGL directly</td><td>same</td><td>analyze → IR → coref → serialize</td><td class="win">+ semi-modals, sentence splitting, quality flags</td></tr>
-      <tr><td>Word-sense choice</td><td class="num">most frequent sense, 66.8%</td><td class="num win">BERT centroids, 73.5%</td><td class="num">73.5% local / 66.8% browser</td><td class="num">66.8% everywhere (joint sense head in training)</td></tr>
+      <tr><td>Word-sense choice</td><td class="num">most frequent sense, 66.8%</td><td class="num win">BERT centroids, 73.5%</td><td class="num">73.5% local / 66.8% browser</td><td class="num win">73.5% everywhere, browser included (sense head trained with the parser)</td></tr>
       <tr><td>Token ids per English word</td><td class="num">3.13</td><td class="num">3.13</td><td class="num">1.96</td><td class="num">1.96</td></tr>
       <tr><td>Proper names</td><td>spelled letter by letter</td><td>same</td><td>7,597 frequent names numbered</td><td>same</td></tr>
       <tr><td>"John and Mary met"</td><td>split into two clauses</td><td>same</td><td class="win">one group</td><td>one group</td></tr>
@@ -119,7 +119,7 @@ flowchart TD
   R --> G[Analyzer<br>UD tree -> Event / Entity graph]
   G --> H[Coreference<br>salience, surface subject, groups]
   H --> S[Simplify<br>split and-clauses and comma asides]
-  S --> I[Sense choice<br>most frequent sense]
+  S --> I[Sense choice<br>same transformer: word in context vs each sense's gloss]
   I --> J[Serializer<br>graph -> UGL tokens]
   K[(Dictionary 0.5.0<br>headword per sense)] --> I
   K --> J
@@ -134,8 +134,8 @@ flowchart TD
   classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
   classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
   classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
-  class D,D2 neural
-  class W,E,H,M,O,I algo
+  class D,D2,I neural
+  class W,E,H,M,O algo
   class B,C,F,R,G,S,J,Q,T rules
   class A,K,L,N,P data
 </pre></div>
@@ -166,6 +166,10 @@ flowchart TD
       <tr><td>Passive salience, one sense per entity</td><td>"it" after a passive picked the agent; re-mentions re-chose senses out of context</td><td>"The bridge was destroyed by the flood ... rebuilt it" = the bridge</td></tr>
       <tr><td>Dictionary 0.5.0</td><td>Concepts were shown with their spelling's overall most common word ("car" read as "machine")</td><td>Headword = spelling most used in that sense; numbering identical to 0.4.0</td></tr>
       <tr><td>Quality flags + clean corpus builder</td><td>Garbage in, garbage out: training data needs to exclude doubtful encodings</td><td>Each line carries its issues; the corpus keeps only clean ones</td></tr>
+      <tr><td>Sense head trained jointly with the parser</td><td>The browser had only most-frequent-sense ("have" read as hold, "observe" as find); fine-tuned parser layers alone lost word meaning</td><td>Word in context vs each candidate's dictionary gloss, read by the same transformer: 66.8% → 73.5% on held-out SemCor, equal to BERT-base, in the same 27 MB file; LAS 91.05 → 90.75</td></tr>
+      <tr><td>Calibrated confidence, meaning-changing uncertainty</td><td>The parser was overconfident (heads it called 80-90% sure were 66% right)</td><td>Temperature scaling (T = 2.2); a word is flagged only if its next-best attachment changes the UGL; at the corpus threshold 2% of kept sentences hold a wrong head</td></tr>
+      <tr><td>Coverage check + round trip</td><td>Words were dropped silently; decoded English sometimes re-encoded differently</td><td>Every content word must reach the UGL; encode → decode → encode must be stable. Dropped words on gold trees 23% → 14%; families fixed: units, dates (#2025-02-14), reported clauses, second objects, place chains, quantifier pronouns, number words, canonical relation order</td></tr>
+      <tr><td>Dictionary 0.6.0</td><td>Display words were abbreviations or did not encode back ("m" re-read as "ms")</td><td>Real words, reversible among common spellings; unit symbols as dictionary data</td></tr>
     </tbody>
   </table></div>
   <div class="grid2">
