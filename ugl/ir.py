@@ -18,6 +18,19 @@ class Attr:
     mods: str = ""             # r z l w x  (more, most, less, very, not)
     pos: Optional[int] = None  # token index, for sense choice
     adverb: bool = False       # came from an adverb (look it up as one: "away", "twice")
+    # kind == "coord": coordinated modifiers ("cell and car numbers", "red or blue cars").
+    # Each member is a run of modifiers ("glass transition and melting temperatures").
+    group: List[List["Attr"]] = field(default_factory=list)
+    logic: str = "and"
+
+    def leaves(self):
+        """This attribute, or every modifier inside a group."""
+        if self.kind != "coord":
+            yield self
+            return
+        for member in self.group:
+            for a in member:
+                yield from a.leaves()
 
 
 @dataclass

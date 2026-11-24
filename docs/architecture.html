@@ -75,6 +75,7 @@ footer { color: var(--muted); font-size: .85rem; }
   <nav aria-label="Versions">
     <a href="#compare">At a glance</a>
     <a href="#next">In progress</a>
+    <a href="#v031">v0.3.1 · groups and prefixes</a>
     <a href="#v030">v0.3.0 · transformer parser</a>
     <a href="#v020">v0.2.0 · own parser</a>
     <a href="#v010w">v0.1.0 + sense model</a>
@@ -105,7 +106,7 @@ footer { color: var(--muted); font-size: .85rem; }
 </section>
 
 <section id="next" class="version">
-  <div class="vhead"><h2>In progress · after v0.3.0</h2><span class="tag">training now</span></div>
+  <div class="vhead"><h2>In progress · after v0.3.1</h2><span class="tag">training now</span></div>
   <p>The browser keeps the small parser. A second, larger parser is being trained to run only when the clean training corpus is built: a sentence goes into the corpus only if both parsers agree on the parts that change its UGL.</p>
   <div class="chart"><pre class="mermaid">
 flowchart LR
@@ -133,11 +134,48 @@ flowchart LR
       <tr><td>Resumable training</td><td>Done</td><td>The first large-parser run was killed when the computer ran low on memory and lost all progress</td><td>Checkpoints every 15 minutes, mid-epoch; a watchdog restarts a killed run from the last checkpoint</td></tr>
     </tbody>
   </table></div>
-  <div class="note"><h3>Open design questions</h3><ul class="tight">
-    <li>Affixes like anti- and non-: their own tokens in the language, or separate dictionary concepts?</li>
-    <li>Shared modifiers ("cell and car numbers"): how the language should write a modifier that applies to two nouns.</li>
-    <li>Nested scopes of the same verb: which closing tag closes which opening one.</li>
-  </ul></div>
+  <div class="note"><h3>Design questions</h3><p>All three were decided and built in v0.3.1 (below).</p></div>
+</section>
+
+<section id="v031" class="version">
+  <div class="vhead"><h2>v0.3.1 · groups and prefixes</h2><span class="tag">library 0.3.1</span><span class="tag">dictionary 0.6.0</span><span class="tag">tokenizer scheme 3</span></div>
+  <p>Three changes to the language itself, decided by the project owner: coordinated modifiers become one group, prefixes become modifier letters, and closing tags officially pair like parentheses. The pipeline is the same as v0.3.0. The steps that changed are marked.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart LR
+  P[Parser<br>unchanged] --> G[Analyzer<br>modifier groups,<br>tense on first verb word]
+  G --> S[Serializer<br>v4 A \v4 B \v4 after the head]
+  L[(Lexicon lookup<br>whole word, then<br>prefix + stem)] --> S
+  S --> U[UGL]
+  U --> D[Decoder<br>reads groups, writes<br>non- / anti- back]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class P neural
+  class G,S rules
+  class D algo
+  class L,U data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Kind</th><th>What changed</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td>Analyzer</td><td class="kind rules">Rules</td><td>Adjectives, compound nouns and counts joined by "and" / "or" become one modifier group. Without a conjunction ("a big, shiny car") adjectives still stack.</td><td>cell and car numbers → <code>n105st v4 n723j \v4 n313j \v4</code></td></tr>
+      <tr><td>Lexicon lookup</td><td class="kind data">Data + rule</td><td>A word missing from the dictionary is tried as prefix + stem: non- on a noun = <code>b</code>, anti- = <code>i</code>, non- on an adjective = <code>x</code> (not). Whole words in the dictionary are never split.</td><td>anti-war → <code>n140ij</code>; non-toxic → nontoxic (already a word)</td></tr>
+      <tr><td>Decoder</td><td class="kind algo">Algorithm</td><td>Right after a noun, and/or over modifiers only is read as a group. Anything else ends the noun phrase, so coordinated clauses still parse as before.</td><td>red, white and blue flags</td></tr>
+      <tr><td>Token ids</td><td class="kind algo">Algorithm</td><td>Two new modifier-letter ids, so the id scheme is now 3. Ids are valid only with their dictionary version and scheme.</td><td><code>+b</code>, <code>+i</code></td></tr>
+    </tbody>
+  </table></div>
+  <h3>What changed from v0.3.0, and why</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th>Why</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Coordinated modifiers as one group</td><td>"cell and car numbers" lost "car"; "red and blue cars" lost "and". Stacking would also decide for the reader whether each car is both colours.</td><td>Nothing dropped; both readings kept, as with coordinated noun phrases. Dropped content words on gold trees 13.8% → 13.0%.</td></tr>
+      <tr><td>Prefixes as letters</td><td>"non-members" and "anti-war" were unknown literals (spelled out, flagged as unknown)</td><td>They are now the concept plus one letter. "non-" on adjectives reuses <code>x</code>, so each meaning has one spelling.</td></tr>
+      <tr><td>Closing tags pair innermost first</td><td>The rule for nesting the same verb was implicit</td><td>Written into the spec (rule 11), with a test. The decoder already worked this way.</td></tr>
+      <tr><td>Tense on the first word of the verb group</td><td>"The cars left" came out present tense: the parser's tag (VBN) and its features (finite past) disagreed</td><td>Past if either says finite past. The auxiliary carries the tense when there is one.</td></tr>
+      <tr><td>Possessive determiners</td><td>"their numbers" decoded as "their numbers of them"</td><td>The possessor is said once</td></tr>
+    </tbody>
+  </table></div>
 </section>
 
 <section id="v030" class="version">

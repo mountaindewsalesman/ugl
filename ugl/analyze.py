@@ -490,7 +490,8 @@ class Analyzer:
     def verb_mods(self, v, cop, passive):
         m = ""
         auxes = v.dep("aux", "aux:pass") + ([cop] if cop is not None else [])
-        finite = [v] + auxes
+        # tense sits on the first word of the verb group: the auxiliary if there is one
+        finite = sorted(auxes, key=lambda t: t.i)[:1] or [v]
         for a in v.dep("aux", "aux:pass"):
             l = a.lemma
             if l in MODALS:
@@ -501,8 +502,10 @@ class Analyzer:
                 m += "g"
         if any(a.lemma == "go" and v.xpos == "VB" for a in v.dep("aux")):
             m += "f"
-        if any(t.f("Tense") == "Past" and (t.f("VerbForm") in (None, "Fin")) and t.xpos in ("VBD",)
-               for t in finite):
+        # past: the tag or the features say so (the parser's two heads can disagree:
+        # "the cars left" tagged VBN but VerbForm=Fin, Tense=Past)
+        if any(t.f("Tense") == "Past" and (t.xpos == "VBD" or t.f("VerbForm") == "Fin")
+               and t.f("VerbForm") in (None, "Fin") for t in finite):
             m += "p"
         if any(k.lower in ("not", "n't", "never") for k in v.dep("advmod")):
             m += "x"
@@ -698,6 +701,29 @@ class Analyzer:
             lemma = t.lower if self.lex.senses(t.lower, "a") else t.lemma
         return Attr(lemma, "adj", mods, t.i, adverb=t.upos == "ADV")
 
+    def modifiers(self, c, tags, member):
+        """The modifiers c contributes to its noun.  Coordinated with "and" / "or"
+        ("red and blue cars", "cell and car numbers", "two or three days") they are
+        one group, so nothing is distributed and both readings survive (SPEC 5).
+        Without a conjunction ("a big, shiny car") the adjectives simply stack."""
+        conj = [k for k in c.dep("conj") if k.upos in tags and not k.dep("nsubj", "cop")]
+        cc = next((g for k in conj for g in k.dep("cc")), None)
+        if conj and cc is not None:
+            return [Attr("", "coord", group=[member(c)] + [member(k) for k in conj],
+                         logic="or" if CC.get(cc.lower) == "or" else "and")]
+        return [a for k in [c] + conj for a in member(k)]
+
+    @staticmethod
+    def compound_attrs(c):
+        """A compound modifier: a name, a number, or a noun with its own compounds
+        before it (glass -> transition -> temperature)."""
+        if c.upos == "PROPN":
+            return [Attr(c.form, "name", "", c.i)]
+        if c.upos == "NUM":
+            return [Attr(number_literal(c), "num", "", c.i)]
+        return [Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i)
+                for k in sorted(compound_chain(c), key=lambda x: x.i)]
+
     def entity(self, t):
         return self.coordinate(t, self.head_entity(t))
 
@@ -880,25 +906,19 @@ class Analyzer:
                     # "issues related to your area": the adjective has its own
                     # complements, so it is a clause about the head
                     e.restrictors.append(self.clause(c, inherit_subj=e))
-                else:
-                    e.attrs.append(self.attr(c))
-                    for k in c.dep("conj"):          # "an interactive and absorbing discussion"
-                        cc = k.dep1("cc")
-                        if k.upos in ("ADJ", "VERB") and (cc is None or cc.lower == "and"):
-                            e.attrs.append(self.attr(k))
+                else:                                # "red and blue cars": one modifier group
+                    e.attrs += self.modifiers(c, ("ADJ", "VERB"), lambda k: [self.attr(k)])
             elif d == "nummod":
-                e.count = number_literal(c, number_parts(c))
                 for a in c.dep("advmod"):              # "about 100", "nearly 50": kept as an adverb
                     e.attrs.append(self.attr(a))
+                group = self.modifiers(c, ("NUM",), lambda k: [Attr(number_literal(k, number_parts(k)), "num", "", k.i)])
+                if group[0].kind == "coord":           # "two or three days"
+                    e.attrs += group
+                else:
+                    e.count = number_literal(c, number_parts(c))
             elif d == "compound":
-                if c.upos == "PROPN":
-                    e.attrs.append(Attr(c.form, "name", "", c.i))
-                elif c.upos == "NUM":
-                    e.attrs.append(Attr(number_literal(c), "num", "", c.i))
-                elif c.upos in ("NOUN", "ADJ", "X"):
-                    # the modifier's own compounds come first: glass -> transition -> temperature
-                    for k in sorted(compound_chain(c), key=lambda x: x.i):
-                        e.attrs.append(Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i))
+                if c.upos in ("PROPN", "NUM", "NOUN", "ADJ", "X"):   # "cell and car numbers"
+                    e.attrs += self.modifiers(c, ("PROPN", "NUM", "NOUN", "ADJ", "X"), self.compound_attrs)
             elif d == "nmod:poss":
                 e.possessor = self.entity(c)
                 e.det = e.det or "t"                   # "the river's bank" is a definite bank

@@ -4,6 +4,7 @@ and the ordering rules of SPEC.md:
     clause := quantifier wrappers ( relation wrappers ( core ) ) + coordination
     core   := subject verb adverbs [object] (complement \\verb)*
     np     := head attrs count restrictive-clauses possessor
+    attr   := a# | n#j | #num | L attr+ \\L attr+ \\L     (coordinated modifiers, L = and / or)
 """
 import re
 
@@ -102,6 +103,8 @@ class Serializer:
         return out
 
     def attr(self, a):
+        if a.kind == "coord":                  # "cell and car numbers": v4 n#j 4 n#j 4
+            return self.coordinated([[t for x in member for t in self.attr(x)] for member in a.group], a.logic)
         if a.kind == "name":
             t = self.proper(a.lemma)
             return [add_mods(t[0], "j")] + t[1:]

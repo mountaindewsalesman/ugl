@@ -109,9 +109,19 @@ NOUN_MODS = {
     "s": "plural", "t": "definite (the)", "d": "this/these", "e": "that/those",
     "x": "none (no)", "q": "which?/what?", "y": "possessor of preceding head",
     "j": "attribute of preceding head (noun used as adjective)",
+    "b": "non- (something other than this: non-member)", "i": "anti- (against: anti-war)",
 }
-ADJ_MODS = {"r": "more", "z": "most", "l": "less", "w": "very", "x": "not"}
-MOD_ORDER = "pfgkhcmuoqxstdeyjrzlw"   # canonical letter order in output
+ADJ_MODS = {"r": "more", "z": "most", "l": "less", "w": "very", "x": "not", "i": "anti- (against)"}
+MOD_ORDER = "pfgkhcmuoqxbistdeyjrzlw"   # canonical letter order in output
+
+# Word-forming prefixes that are grammar, not vocabulary: a word missing from the
+# dictionary whose stem is in it is the stem plus a letter.  Per class of the stem;
+# non- on an adjective or verb is plain negation (non-toxic = not toxic), so one
+# meaning keeps one spelling.  A word the dictionary has as a whole ("antibody",
+# "nonsense") never reaches this.
+PREFIXES = {"non": {"n": "b", "a": "x", "r": "x", "v": "x"},
+            "anti": {"n": "i", "a": "i", "r": "i", "v": "i"}}
+PREFIX_TEXT = {"b": "non-", "i": "anti-"}
 
 MODAL_MODS = {"will": "f", "shall": "f", "would": "h", "can": "c", "could": "ch",
               "may": "m", "might": "mh", "must": "u", "should": "uh", "ought": "uh"}

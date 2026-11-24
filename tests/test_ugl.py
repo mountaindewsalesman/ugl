@@ -325,3 +325,47 @@ def test_round_trip_stable():
         a = U.encode(en)
         assert U.encode(U.decode("\n".join(a))) == a, en
     assert U.encode("I ate the apple at nine in the kitchen.") == U.encode("In the kitchen, I ate the apple at nine.")
+
+
+FAMILIES_7 = [
+    # coordinated modifiers are one group after the head: nothing dropped, nothing distributed
+    ("I wrote down their cell and car numbers.",
+     lambda u, e: re.search(r"n\d+st v4 n\d+j \\v4 n\d+j \\v4", u) and "cell and car numbers" in e and "of them" not in e),
+    ("The red and blue cars left.", lambda u, e: re.search(r"v4 a\d+ \\v4 a\d+ \\v4", u) and "red and blue cars" in e),
+    ("Red, white and blue flags flew.", lambda u, e: "red, white and blue" in e.lower()),
+    ("We waited two or three days.", lambda u, e: r"v5 #2 \v5 #3 \v5" in u),
+    # a coordinated clause after an object is still a clause, not a modifier group
+    ("She told him that it rained and that he left.", lambda u, e: "rained" in e and "left" in e),
+    # tense sits on the first word of the verb group, whichever tagger head says so
+    ("The cars left.", lambda u, e: re.search(r"v\d+p$", u)),
+    ("He has left.", lambda u, e: re.search(r"v\d+k$", u)),
+    # grammatical prefixes: non- on an adjective is "not"; non- noun = b; anti- = i
+    ("Non-toxic paint is safe.", lambda u, e: "?" not in u),
+    ("Non-members cannot vote.", lambda u, e: "?" not in u and "member" in e.lower()),
+    ("The anti-war protest grew.", lambda u, e: re.search(r"n\d+ij", u) and "anti-war protest" in e),
+    ("He takes anti-inflammatory drugs.", lambda u, e: re.search(r"a\d+i\b", u) and "anti-inflammatory" in e),
+]
+
+
+def test_families_7():
+    fails = []
+    for en, ok in FAMILIES_7:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
+
+
+def test_nested_closing_tags_pair_innermost_first():
+    # like parentheses: the first \v104 closes the inner "said"
+    p = Parser(tokenize(r"n4 v104p n4 v104p n3t v3182p \v104 \v104"))
+    p.parse()
+    assert p.opener == {6: 3, 7: 1}, p.opener
+
+
+def test_modifier_groups_round_trip():
+    for en in ("I wrote down their cell and car numbers.", "The red and blue cars left.",
+               "We waited two or three days.", "The anti-war protest grew."):
+        a = U.encode(en)
+        assert U.encode(U.decode("\n".join(a))) == a, (en, a, U.decode("\n".join(a)))

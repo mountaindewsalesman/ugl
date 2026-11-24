@@ -10,7 +10,7 @@ import json
 import os
 from functools import lru_cache
 
-from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, add_mods
+from .core import PREFIXES, RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, add_mods
 
 DICT_DIR = os.path.join(os.path.dirname(__file__), "dictionary")
 
@@ -129,10 +129,30 @@ class Lexicon:
         only: restrict the choice to these senses."""
         s = self.choose_sense(lemma, cls, context, sent, only)
         if s is None:
-            return None
+            return self.prefixed(lemma, cls, mods, context, sent)
         toks = list(self.senses_[s]["tokens"])
         toks[0] = add_mods(toks[0], mods)
         return toks
+
+    def prefixed(self, lemma, cls, mods="", context=(), sent=None):
+        """A word the dictionary lacks, built from a grammatical prefix (core.PREFIXES)
+        and a stem it has: "non-member" = member + b, "anti-inflammatory" =
+        inflammatory + i.  An adjective whose stem is a noun is that noun used as
+        an attribute: "anti-war" = war + j + i.  None when nothing fits."""
+        low = lemma.lower()
+        for pre, letters in PREFIXES.items():
+            if not low.startswith(pre) or len(low) < len(pre) + 3:
+                continue
+            stem = low[len(pre):]
+            if stem.startswith("-"):
+                stem = stem[1:]
+                if self.senses(pre + stem, cls):          # "non-toxic" spelled as the word "nontoxic"
+                    return self.encode_word(pre + stem, cls, mods, context, sent)
+            if letters.get(cls) and self.senses(stem, cls):
+                return self.encode_word(stem, cls, mods + letters[cls], context, sent)
+            if cls in ("a", "r") and self.senses(stem, "n"):
+                return self.encode_word(stem, "n", "j" + letters["n"], context, sent)
+        return None
 
     # ------------------------------------------------------------ decode side
     @lru_cache(maxsize=None)

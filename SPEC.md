@@ -88,6 +88,8 @@ Verbs:
 | noun | `q` | which / what |
 | noun | `y` | possessor of the preceding head (`n150 'John'y` = John's dog) |
 | noun | `j` | noun used as an attribute (`n200 n180j` = kitchen table) |
+| noun | `b` | non- (something other than: `n_member_b` = non-member) |
+| any  | `i` | anti- (against: `a_inflammatory_i`, `n_war_ij` = anti-war) |
 | adj  | `r` `z` `l` `w` | more, most, less, very |
 
 ## 5. Grammar
@@ -101,6 +103,7 @@ np      := head mod*                        modifiers FOLLOW their head
          | L np \L np \L                     coordinated noun phrase, L = v4 (and) / v5 (or);
                                               as a possessor the y goes on L: v4y A \v4 B \v4
 mod     := a# | n#j | #num | v3 clause \v3 | possessor-np(y)   (possessor is always last)
+         | L mod+ \L mod+ \L                coordinated modifiers (rule 10), L = v4 / v5
 ```
 
 Rules:
@@ -130,3 +133,24 @@ Rules:
    coordinated noun phrase (a group); followed by a verb, it is the subject.
    Re-mentioning the group ("they") repeats it. Nothing is distributed, so
    collective readings survive.
+10. **Coordinated modifiers are one group too**, placed where a single modifier
+   would go (after the head): `n_number_s v4 n_cell_j \v4 n_car_j \v4` = cell and
+   car numbers; `n_car_ts v4 a_red \v4 a_blue \v4` = the red and blue cars;
+   `n_day_s v5 #2 \v5 #3 \v5` = two or three days. Each member is a run of
+   modifiers; three or more nest (`v4 A \v4 v4 B \v4 C \v4 \v4`). Right after a
+   noun, and/or over modifiers only (no noun head, no verb) is always this group;
+   anything else is a coordinated noun phrase or clause. As with rule 9, the
+   group does not say whether each car is red and blue or some are red and some
+   blue: English does not either.
+11. **Closing tags pair like parentheses**: a closing tag closes the innermost
+   open scope of that verb. `n4 v_say_p n4 v_say_p n3t v_rain_p \v_say \v_say`
+   = someone said that someone said that it rained; the first `\v_say` closes
+   the second "say".
+12. **Prefixes are letters, not words.** A word the dictionary lacks, made of a
+   grammatical prefix and a stem it has, is the stem plus a letter:
+   non- on a noun is `b` (`n_member_bs` = non-members), anti- is `i` on any word
+   (`a_inflammatory_i` = anti-inflammatory). non- on an adjective or verb is
+   plain `x` (non-toxic = not toxic), so a meaning has one spelling. When the
+   stem is a noun but the word works as an adjective, it is that noun used as
+   an attribute: anti-war = `n_war_ij`. A word the dictionary has whole
+   ("antibody", "nonsense", "nontoxic") is never split.

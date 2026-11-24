@@ -25,7 +25,7 @@ def positions(ev, out=None):
         if e.pos is not None:
             out.add(e.pos)
         out.update(e.parts)
-        for a in e.attrs:
+        for a in (x for at in e.attrs for x in at.leaves()):
             if a.pos is not None:
                 out.add(a.pos)
         for m in e.members:

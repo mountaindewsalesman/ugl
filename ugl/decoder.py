@@ -11,6 +11,7 @@ Grammar (whitespace-separated tokens)
   mod     := a#           adjective
            | n#j | 'X'j   noun used as attribute
            | #num         count
+           | L mod+ \\L mod+ \\L   coordinated modifiers ("cell and car numbers"), L = v4 / v5
            | v3 clause \\v3   relative clause (head noun repeated inside)
            | np-with-y    possessor (always last; its own mods follow it)
 """
@@ -18,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .core import (number_text, parse_literal, WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
+from .core import (PREFIX_TEXT, number_text, parse_literal, WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
                    CLAUSE_FORM_VERBS, V, tokenize)
 
 try:
@@ -61,6 +62,21 @@ class NP:
     rels: List[object] = field(default_factory=list)
     poss: Optional["NP"] = None
     members: List["NP"] = field(default_factory=list)    # coordinated NP: head is the and/or token
+
+
+@dataclass
+class Group:
+    """Coordinated modifiers after a head noun: v4 n#j \\v4 n#j \\v4."""
+    rel: Tok
+    members: List[List[object]]       # each a run of modifiers (Tok, or a nested Group)
+    kind: str = "group"
+    cls: str = ""
+    mods: str = ""
+
+    def leaves(self):
+        for m in self.members:
+            for x in m:
+                yield from (x.leaves() if isinstance(x, Group) else [x])
 
 
 @dataclass
@@ -172,8 +188,8 @@ class Parser:
             advs = []
             while True:
                 a = self.tokat(i)
-                if a is not None and a.cls == "a":
-                    advs.append(a)
+                if a is not None and (a.cls == "a" or self.is_attr_noun(a)):
+                    advs.append(a)                  # "is anti-war": an attribute noun says what it is like
                     i += 1
                 else:
                     break
@@ -203,6 +219,36 @@ class Parser:
                 comps.append(c)
             return Core(np, v, advs, obj, comps), i
         return Bare(np), i
+
+    @staticmethod
+    def is_attr_noun(x):
+        return "j" in x.mods and (x.cls in ("n", "nv") or x.kind == "name")
+
+    def mod_run(self, i):
+        """Modifiers up to the next closing tag: one member of a modifier group."""
+        run = []
+        while not self.is_close(i):
+            x = self.tokat(i)
+            if x is None:
+                break
+            if x.cls == "a" or x.kind == "num" or self.is_attr_noun(x):
+                run.append(x); i += 1
+            elif x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS and "y" not in x.mods:
+                g, i = self.mod_group(i)
+                run.append(g)
+            else:
+                raise ParseError(f"modifier expected at {i}: {self.peek(i)}")
+        if not run:
+            raise ParseError(f"empty modifier group at {i}")
+        return run, i
+
+    def mod_group(self, i):
+        x, o = self.tokat(i), i
+        a, i = self.mod_run(i + 1)
+        i = self.expect_close(i, x.idx, o)
+        b, i = self.mod_run(i)
+        i = self.expect_close(i, x.idx, o)
+        return Group(x, [a, b]), i
 
     def clause_form_start(self, i):
         x = self.tokat(i)
@@ -243,6 +289,23 @@ class Parser:
             elif "y" in x.mods and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
                 np.poss, i = self.coord_np(i)              # v4y A \v4 B \v4 = of (A and B)
                 break
+            elif x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
+                # right after a noun, and/or over modifiers only is a modifier group;
+                # anything else (a coordinated clause or noun phrase) ends the noun phrase
+                opened = dict(self.opener)
+                try:
+                    g, j = self.mod_group(i)
+                except ParseError:
+                    self.opener = opened
+                    break
+                leaves = list(g.leaves())
+                if all(t.kind == "num" for t in leaves):
+                    np.nums.append(g)
+                elif all(t.cls == "a" for t in leaves):
+                    np.adjs.append(g)
+                else:
+                    np.comps.append(NP(g))
+                i = j
             else:
                 break
         return np, i
@@ -378,7 +441,40 @@ class Decoder:
             w = "very " + w
         if "x" in m:
             w = "not " + w
+        return self.affix(t, w)
+
+    @staticmethod
+    def affix(t, w):
+        """Prefix letters back to English: b non-, i anti-."""
+        for letter in ("b", "i"):
+            if letter in t.mods:
+                w = PREFIX_TEXT[letter] + w
         return w
+
+    def mod_text(self, x, adverb=False):
+        """Any modifier: adjective, attribute noun, count, or a group of them."""
+        if isinstance(x, NP):
+            x = x.head
+        if isinstance(x, Group):
+            word = "or" if x.rel.idx == V["or"] else "and"
+            parts = []
+            for i, m in enumerate(x.members):
+                # a nested group of the same kind continues the list: "red, white and blue"
+                if i == len(x.members) - 1 and len(m) == 1 and isinstance(m[0], Group) and m[0].rel.idx == x.rel.idx:
+                    parts += self.mod_text(m[0], adverb).split(f" {word} ")
+                else:
+                    parts.append(" ".join(self.mod_text(t, adverb) for t in m))
+            return ", ".join(parts[:-1]) + f" {word} " + parts[-1] if len(parts) > 2                 else f" {word} ".join(parts)
+        if x.kind == "num":
+            return self.lemma(x)
+        if Parser.is_attr_noun(x):
+            return self.affix(x, self.lemma(x))
+        return self.adj(x, adverb)
+
+    def count_text(self, n):
+        w = self.mod_text(n)
+        # "tens of kilometers": a plural round number counts in units of itself
+        return w + (" of" if w.endswith("s") and not w[0].isdigit() and not isinstance(n, Group) else "")
 
     # -------------------------------------------------- noun phrases
     def namelike(self, np):
@@ -413,9 +509,8 @@ class Decoder:
             rq = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
             if rq:                                  # "many things", "all things"
                 word = ("all" if rq == "every" else rq) + " " + SPECIAL.get((h.base, "s"), word)
-            nums = [self.lemma(n) + (" of" if self.lemma(n).endswith("s") and not self.lemma(n)[0].isdigit() else "")
-                    for n in np.nums]
-            words = nums + [word] + [self.adj(a) for a in np.adjs]
+            nums = [self.count_text(n) for n in np.nums]
+            words = nums + [word] + [self.mod_text(a) for a in np.adjs]
             for r in np.rels:                       # "someone who can help"
                 sub = Ctx()
                 sub.gap = h.base
@@ -432,14 +527,14 @@ class Decoder:
         elif h.kind == "word" and plural:
             noun = inflect(noun, "NNS")
         # an adverb in a counted phrase modifies the number: "about 100 degrees"
-        lead = [self.adj(a) for a in np.adjs if np.nums and self.is_adverb_sense(a)]
-        pre = ([self.adj(a) for a in np.adjs if not (np.nums and self.is_adverb_sense(a))]
-               + [self.lemma(c.head) for c in np.comps])
-        # "tens of kilometers": a plural round number counts in units of itself
-        nums = [self.lemma(n) + (" of" if self.lemma(n).endswith("s") and not self.lemma(n)[0].isdigit() else "")
-                for n in np.nums]
+        noun = self.affix(h, noun)                   # "non-members"
+        lead = [self.mod_text(a) for a in np.adjs if np.nums and self.is_adverb_sense(a)]
+        pre = ([self.mod_text(a) for a in np.adjs if not (np.nums and self.is_adverb_sense(a))]
+               + [self.mod_text(c) for c in np.comps])
+        nums = [self.count_text(n) for n in np.nums]
         det = ""
         of_part = ""
+        poss_said = False                               # the possessor is already the determiner
         quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
         if quant:
             if quant == "every" and (plural or np.poss is not None or set(h.mods) & set("det")):
@@ -453,7 +548,8 @@ class Decoder:
             elif "t" in h.mods:                             # "all the dogs", "most of the apples"
                 det += (" " if quant == "all" else " of ") + "the"
         elif np.poss is not None and self.namelike(np.poss) and "t" in h.mods:
-            det = self.np(np.poss, ctx, "poss")          # "Simon's book" (a possessive is definite)
+            det = self.np(np.poss, ctx, "poss")          # "Simon's book", "their numbers" (definite)
+            poss_said = True
         elif "q" in h.mods:
             det = "which"
         elif "x" in h.mods:
@@ -467,7 +563,7 @@ class Decoder:
         elif h.kind == "word" and not plural and not nums and not self.lex.is_proper(h.raw):
             first = (pre[0] if pre else noun)
             det = "an" if VOWEL.match(first) else "a"
-        if np.poss is not None and not det.endswith("'s") and not det.endswith("'") and not quant:
+        if np.poss is not None and not poss_said and not quant:
             of_part = "of " + self.np(np.poss, ctx, "obj")   # "the bank of the river", "an arson of houses"
         words = [det] + lead + nums + pre + [noun, of_part]
         for r in np.rels:
@@ -603,7 +699,7 @@ class Decoder:
                 return f"{word} {self.clause(c.body, ctx, question=True)}"
             return f"{self.clause(c.body, ctx, question)} {word}"
         if r == V["with"] and c.land.head.base == "n7" and c.land.adjs and not c.land.head.mods:
-            advs = " ".join(self.adj(a, adverb=True) for a in c.land.adjs)
+            advs = " ".join(self.mod_text(a, adverb=True) for a in c.land.adjs)
             return f"{advs}, {self.clause(c.body, ctx, question)}"
         if self.matches(c.land, ctx.gap):          # "the house in which I live"
             inner = self.clause(c.body, Ctx(), question)
@@ -636,7 +732,7 @@ class Decoder:
             lemma = RESERVED_VERBS[v.idx][0] if v.kind == "word" and v.idx in RESERVED_VERBS else self.lemma(v)
             copula = v.kind == "word" and v.idx == V["be"]
             parts = (["not"] if "x" in v.mods else []) + [inflect(lemma, "VBG")]
-            parts += [self.adj(a, adverb=not copula) for a in c.advs]
+            parts += [self.mod_text(a, adverb=not copula) for a in c.advs]
             if c.obj is not None:
                 parts.append(self.np(c.obj, ctx, "obj"))
             parts += [self.complement(x, c, ctx) for x in c.comps]
@@ -645,7 +741,7 @@ class Decoder:
             lemma = RESERVED_VERBS[v.idx][0] if v.kind == "word" and v.idx in RESERVED_VERBS else self.lemma(v)
             copula = v.kind == "word" and v.idx == V["be"]
             parts = (["not"] if "x" in v.mods else []) + ["to", lemma]
-            parts += [self.adj(a, adverb=not copula) for a in c.advs]
+            parts += [self.mod_text(a, adverb=not copula) for a in c.advs]
             if c.obj is not None:
                 parts.append(self.np(c.obj, ctx, "obj"))
             parts += [self.complement(x, c, ctx) for x in c.comps]
@@ -664,7 +760,7 @@ class Decoder:
         if subj_gap:
             subj = ctx.gap_word
         copula = v.kind == "word" and v.idx == V["be"]
-        advs = [self.adj(a, adverb=not copula) for a in c.advs]
+        advs = [self.mod_text(a, adverb=not copula) for a in c.advs]
         obj = ""
         if c.obj is not None and not obj_gap and not obj_wh:
             obj = self.np(c.obj, ctx, "obj")

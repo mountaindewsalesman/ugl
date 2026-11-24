@@ -20,7 +20,8 @@ from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, MOD_ORDER, parse_lite
 # whenever the id layout changes; record both next to any tokenized data.
 #   1: first layout
 #   2: one-id closing tags for reserved verbs; literal pieces from the dictionary
-SCHEME = 2
+#   3: modifier letters b (non-) and i (anti-)
+SCHEME = 3
 
 SPECIALS = ["<pad>", "<bos>", "<eos>", "<unk>", "<sep>"]
 PIECE = "\u25b8"            # vocab prefix for a multi-character literal piece
