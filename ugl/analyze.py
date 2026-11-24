@@ -53,18 +53,24 @@ PREP = {
 NEGATING = {"without", "unlike"}
 TIME_SENSITIVE = {"at", "in", "on"}        # become "time" when the landmark is a time
 # subordinator -> relation name (clause form)
-SUBORD = {"because": "cause", "since": "cause", "as": "cause", "so": "cause", "if": "if",
+SUBORD = {"because": "cause", "since": "cause", "as": "cause", "if": "if",
           "unless": "if", "when": "time", "whenever": "time", "once": "after", "while": "during",
           "before": "before", "after": "after", "until": "until", "till": "until",
           "although": "but", "though": "but", "whereas": "but", "even though": "but",
           "so that": "for", "in order to": "for", "to": "for", "that": "for", "where": "at",
           "wherever": "at", "like": "like", "as if": "like", "than": "against", "whether": "if"}
-CC = {"and": "and", "or": "or", "but": "but", "nor": "or", "yet": "but", "&": "and", "plus": "and"}
+CC = {"and": "and", "or": "or", "but": "but", "nor": "or", "yet": "but", "&": "and", "plus": "and",
+      "so": "cause"}                 # "A, so B": A causes B  (logic(cause, A, B))
 DEICTIC = {"here": ("n5", "d", "at"), "there": ("n5", "e", "at"), "now": ("n6", "d", "time"),
            "then": ("n6", "e", "time"), "where": ("n5", "q", "at"), "when": ("n6", "q", "time"),
            "why": ("n8", "q", "cause"), "how": ("n7", "q", "with")}
 TIME_NOUN_ADV = {"today", "yesterday", "tomorrow", "tonight", "recently", "earlier", "later",
                  "soon", "ago"}
+# connective adverbs: on a joined clause ("It rained, so I stayed") they say
+# how the two clauses relate.  logic(name, A, B): A is the earlier clause.
+CONNECTIVE = {"so": "cause", "therefore": "cause", "thus": "cause", "hence": "cause",
+              "consequently": "cause", "however": "but", "nevertheless": "but", "nonetheless": "but",
+              "yet": "but", "then": "after", "afterwards": "after", "otherwise": "or"}
 CLAUSE_DEPS = {"nsubj", "nsubj:pass", "csubj", "csubj:pass", "expl", "aux", "aux:pass", "cop",
                "obj", "iobj", "obl", "obl:tmod", "obl:npmod", "obl:agent", "advcl", "ccomp",
                "xcomp", "mark", "parataxis", "discourse", "vocative", "dislocated", "advmod",
@@ -242,6 +248,9 @@ class Analyzer:
                 self.adverbial(k, ev)
             elif d in ("obl", "obl:tmod", "obl:npmod", "obl:agent") and k is not agent:
                 ev.rels.append(self.rel_from_case(k))
+            elif d == "advcl" and self.marker(k) == "so":
+                # "A so B": A (the main clause) causes B
+                ev.coord.append(("cause", self.clause(k, inherit_subj=ev.subj)))
             elif d == "advcl":
                 ev.rels.append(self.subordinate(k, ev))
             elif d in ("ccomp", "xcomp"):
@@ -249,12 +258,10 @@ class Analyzer:
         # ---- coordination
         for k in v.dep("conj"):
             if k.upos in ("VERB", "AUX", "ADJ") or k.dep("nsubj", "nsubj:pass", "cop"):
-                cc = k.dep1("cc")
-                ev.coord.append((CC.get(cc.lower if cc is not None else "and", "and"),
-                                 self.clause(k, inherit_subj=ev.subj)))
+                ev.coord.append((self.link(k), self.clause(k, inherit_subj=ev.subj)))
         for k in v.dep("parataxis"):
             if k.upos in ("VERB", "AUX") or k.dep("nsubj", "cop"):
-                ev.coord.append(("and", self.clause(k)))
+                ev.coord.append((self.link(k), self.clause(k)))
         return ev
 
     def verb_mods(self, v, cop, passive):
@@ -280,6 +287,9 @@ class Analyzer:
 
     def adverbial(self, k, ev):
         w = k.lower
+        head = self.toks[k.head] if k.head >= 0 else None
+        if w in CONNECTIVE and head is not None and head.deprel in ("conj", "parataxis"):
+            return                                     # used as the clause link (see link())
         if w in ("not", "n't", "never"):
             return                                     # handled in verb_mods
         if k.i in self.relheads and w in DEICTIC:     # "the place where I live": at <the place>
@@ -339,6 +349,21 @@ class Analyzer:
         if ent.kind == "name":
             return self.lex.in_class(ent.lemma.lower(), "time")
         return False
+
+    @staticmethod
+    def link(k):
+        """How a joined clause k relates to the previous one: its connective adverb
+        ("so" = cause, "then" = after), else its conjunction, else and.
+        logic "after" with A = earlier clause reads "B after A" = "A, then B"."""
+        for a in k.dep("advmod"):
+            if a.lower in CONNECTIVE:
+                return CONNECTIVE[a.lower]
+        cc = k.dep1("cc")
+        return CC.get(cc.lower if cc is not None else "and", "and")
+
+    @staticmethod
+    def marker(k):
+        return " ".join(w for m in k.dep("mark") for w in [m.lower] + [f.lower for f in m.dep("fixed")])
 
     def subordinate(self, k, main):
         """advcl -> clause-form relation: Rel(name, Event)."""
