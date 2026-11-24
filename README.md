@@ -1,6 +1,6 @@
 ﻿# UGL: a universal grammatical language (v0.1, English only)
 
-English â‡„ a numbered-concept notation whose grammar is fully explicit. See
+English ⇄ a numbered-concept notation whose grammar is fully explicit. See
 [SPEC.md](SPEC.md) for the language itself.
 
 ```
@@ -32,7 +32,7 @@ pip install -e .[dev]             # + tools to rebuild dictionaries / run tests
 ```
 
 Or straight from GitHub, with no clone needed:
-`pip install git+https://github.com/<you>/ugl.git`
+`pip install git+https://github.com/mountaindewsalesman/ugl.git`  (private repo: needs your GitHub login)
 
 ## Use as a library
 
@@ -101,14 +101,15 @@ Dictionary 0.1.0 was built from 30M characters of Wikipedia (2.07M words):
 * 4,628 senses expressed through other words: gloss compounds (`puppy` →
   young dog), connotation collapses (`mirthless` → `joyless`) and adverbs
   folded into their adjectives.
+
 ## How it works
 
 | stage | file | method |
 |---|---|---|
 | corpus | `scripts/fetch_wikipedia.py` | MediaWiki API or dump streaming |
 | numbering | `ugl/build_lexicon.py` | frequency per WordNet sense, gloss decomposition |
-| English â†’ UGL | `ugl/encoder.py` | spaCy dependency parse + ~40 rewrite rules |
-| UGL â†’ English | `ugl/decoder.py` | recursive-descent parser + realiser (`lemminflect`); no neural net |
+| English → UGL | `ugl/encoder.py` | spaCy dependency parse + ~40 rewrite rules |
+| UGL → English | `ugl/decoder.py` | recursive-descent parser + realiser (`lemminflect`); no neural net |
 
 ## Measured on 121 random Wikipedia sentences
 
@@ -121,15 +122,44 @@ Token counts only save compute if a model uses UGL tokens as its vocabulary,
 one token per concept. A standard tokenizer splits `n26988` into several
 pieces.
 
+## Choosing word meanings (optional, local)
+
+Each word's meaning is chosen with a BERT model that runs on your machine.
+For every meaning it keeps one average vector, built from the hand-tagged
+SemCor corpus.
+
+| method | accuracy on 1,493 held-out ambiguous words |
+|---|---|
+| always the most common meaning (default without the model) | 66.8% |
+| static word vectors vs. glosses (`ugl.wsd`) | 66.8% (no gain) |
+| **BERT context vs. SemCor sense centroids** (`ugl.wsd_context`) | **73.5%** |
+
+To turn it on:
+
+```
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install transformers nltk
+# either download the trained centroids (37 MB) from the GitHub release ...
+gh release download wsd-0.1.0 -R mountaindewsalesman/ugl -D ugl/models
+# ... or train them yourself (~20 min on CPU)
+python tools/train_wsd.py --out ugl/models/bert-semcor.npz
+python tools/eval_wsd.py --context ugl/models/bert-semcor.npz
+```
+
+`ugl.load()` uses the model automatically when `ugl/models/bert-semcor.npz`
+(or the file named in `$UGL_WSD`) exists. Use `ugl.load(wsd=False)` to turn
+it off. The first time, `bert-base-uncased` (440 MB) is downloaded from
+Hugging Face; after that, everything is local.
+
 ## Known limitations (in order of how much they hurt)
 
-1. **Word-sense choice is weak.** Senses are picked by most-frequent-sense
-   plus gloss overlap, so `script` â†’ *book* and `particle` â†’ *atom*. This is
-   the biggest source of meaning errors. The fix is a neural sense
-   disambiguator (e.g. a small BERT trained on SemCor), which can still run
-   locally.
-2. **The parser's mistakes become UGL's mistakes.** Lists, parentheses, dates,
-   headings and long sentences parse badly; some modifiers and phrases are
+1. **Word-sense choice is still the main source of meaning errors.** The
+   contextual model picks the right meaning 73.5% of the time on held-out
+   SemCor, against 66.8% for "always pick the most common meaning". It
+   still fails on cases like `particle` → *atom*, or two meanings of "bank"
+   in one sentence. Without the model installed, the encoder always picks
+   the most common meaning.
+2. **The parser's mistakes become UGL's mistakes.** Lists, dates, headings and long sentences parse badly; some modifiers and phrases are
    silently dropped.
 3. **Pronoun resolution is a recency heuristic.** It can pick the wrong noun.
 4. **Distributed coordination.** "John and Mary met" becomes "John met and

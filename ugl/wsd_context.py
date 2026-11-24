@@ -14,7 +14,8 @@ import os
 import numpy as np
 
 DEFAULT_MODEL = "bert-base-uncased"
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "wsd", "bert-semcor.npz")
+# looked up in this order: $UGL_WSD, ugl/models/ inside the package
+DEFAULT_PATH = os.environ.get("UGL_WSD") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "bert-semcor.npz")
 
 
 class ContextEmbedder:

@@ -14,3 +14,4 @@ data/lexicon.tsv
 data/compounds.tsv
 dictionary-export/
 data/wsd/
+ugl/models/*.npz
