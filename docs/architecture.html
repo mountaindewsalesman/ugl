@@ -1,0 +1,277 @@
+<title>UGL Architecture Versions</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; each version is a section with flowchart, step table, change log. */
+:root {
+  --bg: #f6f7fa; --surface: #ffffff; --fg: #17202e; --muted: #5a6577; --line: #dde2ea;
+  --accent: #2f5fd0; --accent-soft: #e7eefc;
+  --neural: #7a3fd0; --algo: #0f7f6e; --rules: #b5650b; --data: #5a6577;
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11151c; --surface: #181e28; --fg: #e6eaf1; --muted: #9aa5b6; --line: #2a3342;
+  --accent: #7ea2ff; --accent-soft: #1f2a42;
+  --neural: #b48cff; --algo: #4fd1bd; --rules: #f0a54e; --data: #9aa5b6; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11151c; --surface: #181e28; --fg: #e6eaf1; --muted: #9aa5b6; --line: #2a3342;
+  --accent: #7ea2ff; --accent-soft: #1f2a42;
+  --neural: #b48cff; --algo: #4fd1bd; --rules: #f0a54e; --data: #9aa5b6; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--body); }
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: 2rem; } h2 { font-size: 1.5rem; } h3 { font-size: 1.1rem; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+.lede { color: var(--muted); }
+header { display: grid; gap: 12px; }
+.eyebrow { font: 600 .75rem/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: .85rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.k-neural { background: var(--neural); } .k-algo { background: var(--algo); }
+.k-rules { background: var(--rules); } .k-data { background: var(--data); }
+nav { display: flex; flex-wrap: wrap; gap: 8px; }
+nav a { font: 500 .85rem var(--body); color: var(--accent); text-decoration: none; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+nav a:focus-visible, nav a:hover { border-color: var(--accent); outline: none; }
+section.version { display: grid; gap: 18px; padding-top: 8px; border-top: 2px solid var(--line); }
+.vhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.tag { font: 500 .78rem var(--mono); padding: 2px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; overflow-x: auto; }
+.chart pre.mermaid { margin: 0; background: transparent; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { font: 600 .74rem var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: none; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kind { font: 600 .72rem var(--body); letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.kind.neural { color: var(--neural); } .kind.algo { color: var(--algo); } .kind.rules { color: var(--rules); } .kind.data { color: var(--data); }
+.win { color: var(--algo); font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 6px; min-width: 0; }
+.note h3 { font-size: 1rem; }
+ul.tight { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
+footer { color: var(--muted); font-size: .85rem; }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">UGL · universal grammatical language</div>
+  <h1>Architecture, version by version</h1>
+  <p class="lede">How English becomes UGL tokens and back, for every released version. Each version has a flowchart, what each step is, and what changed and why. Newest first. Source: <span class="mono">github.com/mountaindewsalesman/ugl</span></p>
+  <div class="legend" aria-label="Legend">
+    <span><i class="dot k-neural"></i>Neural network (trained)</span>
+    <span><i class="dot k-algo"></i>Algorithm (exact procedure)</span>
+    <span><i class="dot k-rules"></i>Hand-written rules</span>
+    <span><i class="dot k-data"></i>Data / frozen file</span>
+  </div>
+  <nav aria-label="Versions">
+    <a href="#compare">At a glance</a>
+    <a href="#v020">v0.2.0 · own parser</a>
+    <a href="#v010w">v0.1.0 + sense model</a>
+    <a href="#v010">v0.1.0 · prototype</a>
+    <a href="#dict">Dictionary builds</a>
+  </nav>
+</header>
+
+<section id="compare" class="version">
+  <div class="vhead"><h2>At a glance</h2></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Measure</th><th>v0.1.0 prototype</th><th>v0.1.0 + sense model</th><th>v0.2.0 current</th></tr></thead>
+    <tbody>
+      <tr><td>English parser</td><td>spaCy <code>en_core_web_md</code> (CNN)</td><td>same</td><td class="win">UGL's own BiLSTM + biaffine, numpy</td></tr>
+      <tr><td>Parser accuracy (EWT test, labelled attachment)</td><td class="num">not measured on UD</td><td class="num">same</td><td class="num win">86.3%</td></tr>
+      <tr><td>Meaning layer</td><td>~40 rules writing UGL directly</td><td>same</td><td class="win">analyze → IR → coref → serialize</td></tr>
+      <tr><td>Word-sense choice</td><td class="num">most frequent sense, 66.8%</td><td class="num win">BERT centroids, 73.5%</td><td class="num">73.5% local / 66.8% browser</td></tr>
+      <tr><td>Token ids per English word</td><td class="num">3.13</td><td class="num">3.13</td><td class="num win">1.96</td></tr>
+      <tr><td>Proper names</td><td>spelled letter by letter</td><td>same</td><td class="win">7,597 frequent names numbered</td></tr>
+      <tr><td>"John and Mary met"</td><td>split into two clauses</td><td>same</td><td class="win">one group</td></tr>
+      <tr><td>Crashes on 1,500 hand-annotated trees</td><td class="num">n/a</td><td class="num">n/a</td><td class="num win">0</td></tr>
+      <tr><td>Runs in the browser</td><td>no (spaCy has no WebAssembly build)</td><td>no</td><td class="win">yes, live in Pyodide</td></tr>
+      <tr><td>Install needs</td><td>spaCy + 45 MB model</td><td>+ PyTorch, transformers, BERT 440 MB</td><td class="win">numpy + lemminflect</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="v020" class="version">
+  <div class="vhead"><h2>v0.2.0 · own parser</h2><span class="tag">library 0.2.0</span><span class="tag">dictionary 0.4.0</span><span class="tag">tokenizer scheme 2</span></div>
+  <p>The whole encoder runs on numpy, so it works the same on a desktop and in a browser. Meaning is built in one intermediate graph before any UGL is written.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart TD
+  A[English text] --> B[Strip asides<br>regex]
+  B --> C[Sentence splitter + UD tokenizer<br>regex, clitic rules]
+  C --> D[Tagger + dependency parser<br>char CNN + word vectors -> 3-layer BiLSTM<br>-> biaffine arcs and labels]
+  D --> E[Tree decoding<br>Chu-Liu/Edmonds MST, one root]
+  E --> F[Lemmatizer<br>lemminflect]
+  F --> G[Analyzer<br>UD tree -> Event / Entity graph]
+  G --> H[Coreference<br>salience + binding constraint]
+  H --> I[Sense choice<br>BERT centroids or most frequent]
+  I --> J[Serializer<br>graph -> UGL tokens]
+  K[(Dictionary 0.4.0<br>numbers, names, classes, pieces)] --> I
+  K --> J
+  J --> L[UGL text]
+  L --> M[Tokenizer scheme 2<br>concept ids, modifier ids, BPE pieces]
+  M --> N[Token ids for model training]
+  L --> O[Decoder<br>recursive descent parse]
+  O --> P[Realiser<br>English word order + lemminflect]
+  P --> Q[English back-translation]
+  L --> R[Readable view<br>humanize]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class D,I neural
+  class E,H,M,O algo
+  class B,C,F,G,J,P,R rules
+  class A,K,L,N,Q data
+</pre></div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Kind</th><th>What it is</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>Tokenize</td><td class="kind rules">Rules</td><td>Splits sentences and words the way the Universal Dependencies treebanks do</td><td>Regex; splits clitics (<code>don't</code> → <code>do n't</code>, <code>John's</code> → <code>John 's</code>); skips abbreviations when splitting sentences</td></tr>
+      <tr><td>Parser</td><td class="kind neural">Neural net</td><td>Tags each word and finds which word it depends on, with the relation name</td><td>Per word: trained word embedding (100-d), frozen pretrained vectors (spaCy md, reduced to 128-d by PCA, 60k forms), prefix/suffix embeddings, word-shape embedding, and a character CNN (32-d characters, 100 filters, width 3, max-pooled). Then a 3-layer bidirectional LSTM (300 units each way). Heads: linear UPOS, Penn XPOS and morphological-feature taggers; biaffine scorer for arcs (MLP 400) and labels (MLP 100). Trained with PyTorch on an RTX 4060 on 5 UD English treebanks (EWT, GUM, LinES, ParTUT, Atis; about 33k sentences), 50 epochs, Adam. Exported weights (31 MB) run on numpy; training checks numpy and PyTorch agree.</td></tr>
+      <tr><td>Tree decoding</td><td class="kind algo">Algorithm</td><td>Turns arc scores into a valid tree</td><td>Chu-Liu/Edmonds maximum spanning arborescence with exactly one root; verified against brute force</td></tr>
+      <tr><td>Lemmatizer</td><td class="kind rules">Rules</td><td>Base form of each word (ate → eat)</td><td>lemminflect lookup tables, with clitic rules ('s → be or have)</td></tr>
+      <tr><td>Analyzer</td><td class="kind rules">Rules</td><td>Builds who did what to whom, where and when</td><td>Each UD relation is handled in exactly one place. Output: Events (predicate, tense/mood letters, subject, object, adverbs, complements, relations) and Entities (head, modifiers, possessor, relative clauses, quantifier, coordination).</td></tr>
+      <tr><td>Coreference</td><td class="kind algo">Algorithm</td><td>Replaces he/she/it/they with what they mean</td><td>Candidates from the last 2 sentences; matches number, person-ness and gender; prefers subjects and recency; an ordinary pronoun never means its own clause's subject. Unresolved pronouns become <code>n4</code> (someone) or <code>n3t</code> (the thing).</td></tr>
+      <tr><td>Sense choice</td><td class="kind neural">Neural net</td><td>Picks which meaning of a word is meant</td><td>Local install: BERT-base context vector against per-sense centroids from SemCor, plus a frequency prior (73.5%). Browser: most frequent sense (66.8%).</td></tr>
+      <tr><td>Serializer</td><td class="kind rules">Rules</td><td>The only code that writes UGL</td><td>Quantifier scopes outermost, then relations, then the core clause (subject verb adverbs object complements). Coordinated noun phrases stay one group. Frequent names become numbered nouns.</td></tr>
+      <tr><td>Tokenizer</td><td class="kind algo">Algorithm</td><td>UGL text ↔ integer ids</td><td>One id per concept in frequency order, one per modifier letter, one per closing tag of a relation verb; rare literals split into 4,000 BPE pieces learned from the corpus</td></tr>
+      <tr><td>Decoder</td><td class="kind algo">Algorithm</td><td>UGL → English</td><td>Recursive-descent parser over the UGL grammar, then a realiser (word order, articles, agreement, inflection via lemminflect). No neural net.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>What changed from v0.1.0, and why</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th>Why</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Replaced spaCy with UGL's own parser</td><td>spaCy cannot run in the browser, and its labels are English-specific</td><td>Live encoding in the playground; Universal Dependencies labels; 86.3% LAS</td></tr>
+      <tr><td>Character CNN in the parser</td><td>Rare words and names were mis-tagged</td><td>LAS 86.0 → 86.3; exact match with gold-tree output 43.2% → 45.2%</td></tr>
+      <tr><td>Meaning graph between parse and UGL</td><td>Rules writing UGL directly kept needing special cases</td><td>One place per grammatical relation; zero crashes on 1,500 gold trees</td></tr>
+      <tr><td>Frequent proper nouns numbered (dictionary 0.3.0)</td><td>Names were spelled letter by letter and took many tokens</td><td>3.13 → 2.72 ids per word</td></tr>
+      <tr><td>Lowercase counts only feed lowercase senses</td><td>"north" was inflating "North" (the Union)</td><td>Common and proper senses ranked correctly</td></tr>
+      <tr><td>One-id closing tags (scheme 2)</td><td>Each closing tag cost two ids</td><td>2.72 → 2.48 ids per word</td></tr>
+      <tr><td>BPE pieces for literals (dictionary 0.4.0)</td><td>Remaining rare names still cost one id per character</td><td>2.48 → 1.99 ids per word</td></tr>
+      <tr><td>Coordinated noun phrases stay one group</td><td>Splitting "John and Mary met" changed its meaning and duplicated clauses</td><td>Collective readings kept; 1.99 → 1.96 ids per word</td></tr>
+      <tr><td>Unknown words take modifier letters (<code>n?'DPR'j</code>)</td><td>Unknown attributes broke the noun phrase</td><td>Decode failures on gold trees 9 → 0</td></tr>
+      <tr><td>Connective adverbs link clauses</td><td>"It rained, so I stayed" read as "and"</td><td>so / therefore → cause, however → but, then → after</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="v010w" class="version">
+  <div class="vhead"><h2>v0.1.0 + sense model</h2><span class="tag">library 0.1.0</span><span class="tag">dictionary 0.1.0</span><span class="tag">optional add-on</span></div>
+  <p>Same pipeline as the prototype, plus a contextual model for choosing word meanings. A cheaper word-vector method was tested first and gave no gain.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart LR
+  A[Word in its sentence] --> B[BERT-base-uncased<br>12-layer transformer<br>sum of last 4 layers]
+  B --> C[Context vector]
+  D[(SemCor<br>hand-tagged senses)] --> E[Per-sense centroids<br>average BERT vector<br>about 25k senses]
+  F[(Dictionary glosses)] --> G[Gloss vector<br>for senses SemCor lacks]
+  C --> H[Score each candidate sense<br>cosine + 0.05 x log rank prior]
+  E --> H
+  G --> H
+  H --> I[Chosen sense -> UGL token]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class B,E,G neural
+  class H algo
+  class A,C,D,F,I data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Method</th><th>Accuracy on 1,493 held-out ambiguous words</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Most frequent sense</td><td class="num">66.8%</td><td>baseline</td></tr>
+      <tr><td>Static word vectors vs glosses</td><td class="num">66.8%</td><td>no gain; dropped</td></tr>
+      <tr><td>BERT context vs SemCor centroids</td><td class="num win">73.5%</td><td>kept; about 20% fewer wrong meanings</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="v010" class="version">
+  <div class="vhead"><h2>v0.1.0 · prototype</h2><span class="tag">library 0.1.0</span><span class="tag">dictionary 0.1.0</span><span class="tag">tokenizer scheme 1</span></div>
+  <p>The first working version: spaCy parses English and about 40 rewrite rules write UGL straight from spaCy's tree.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart TD
+  A[English text] --> B[spaCy en_core_web_md<br>CNN tagger + transition parser + NER]
+  B --> C[Encoder rules<br>about 40 rules on spaCy labels]
+  C --> D[Pronoun replacement<br>recency heuristic]
+  D --> E[Sense choice<br>most frequent + simplified Lesk]
+  F[(Dictionary 0.1.0)] --> E
+  E --> G[UGL text]
+  G --> H[Tokenizer scheme 1<br>names spelled by character]
+  G --> I[Decoder + realiser]
+  I --> J[English back-translation]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class B neural
+  class E,H,I algo
+  class C,D rules
+  class A,F,G,J data
+</pre></div>
+  <div class="grid2">
+    <div class="note"><h3>What worked</h3><ul class="tight">
+      <li>Simple sentences round-tripped exactly</li>
+      <li>0.94 UGL tokens per English word (before tokenizer ids)</li>
+      <li>Frozen, versioned dictionary from day one</li>
+    </ul></div>
+    <div class="note"><h3>Why it was replaced</h3><ul class="tight">
+      <li>spaCy cannot run in a browser</li>
+      <li>Rules mixed grammar and token spelling, so fixes became special cases</li>
+      <li>3% of encodings failed to decode; names cost many tokens</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="dict" class="version">
+  <div class="vhead"><h2>Dictionary builds</h2><span class="tag">0.1.0 → 0.4.0</span></div>
+  <p>How word numbers are assigned. A release is frozen; a new build gets a new version.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart TD
+  A[(Wikipedia sample<br>89M characters)] --> B[Count lemmas + runs of proper nouns<br>spaCy tagger]
+  B --> C[Split counts over WordNet senses<br>SemCor-weighted, lowercase only to common senses]
+  N[Frequent names<br>20+ mentions] --> C
+  B --> N
+  C --> D[Order all senses by frequency]
+  D --> E{Gloss expressible with<br>3 or fewer earlier words?}
+  E -- yes --> F[Compound<br>puppy = young dog, no number]
+  E -- no --> G[Primitive<br>next number in its class]
+  G --> H[Semantic classes<br>person / time / place]
+  B --> I[BPE pieces<br>from strings that stay literals]
+  F --> J[(Frozen dictionary file<br>gzipped JSON)]
+  G --> J
+  H --> J
+  I --> J
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class B neural
+  class C,D,E,I algo
+  class F,G,H,N rules
+  class A,J data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Version</th><th>Added</th><th>Why</th><th>Numbers changed?</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">0.1.0</td><td>81k noun, 13.7k verb, 18.3k adjective primitives; 4.6k compounds and collapses</td><td>First build, 30M characters</td><td>n/a</td></tr>
+      <tr><td class="mono">0.2.0</td><td>Semantic classes: 10,297 person, 908 time, 4,880 place senses</td><td>Tell "at nine" (time) from "at home" (place)</td><td>No</td></tr>
+      <tr><td class="mono">0.3.0</td><td>7,597 frequent names as nouns; recount on 89M characters</td><td>Names were the largest token cost</td><td>Yes</td></tr>
+      <tr><td class="mono">0.4.0</td><td>4,000 BPE literal pieces</td><td>Rare literals cost one id per character</td><td>No</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer><p>Token ids depend on (dictionary version, tokenizer scheme); record both with any training data. Updated with each release.</p></footer>
+</div>
