@@ -55,11 +55,14 @@ def show(enc, dec, text, gloss=False):
     for ugl in enc.encode(text, keep_memory=True):
         print("UGL :", ugl)
         if gloss:
-            print("GLOSS:", gloss_line(enc.lex, ugl))
+            print("READ:", HUMANIZER(ugl))
         try:
             print("BACK:", dec.decode(ugl))
         except Exception as e:
             print("BACK: <decode error:", e, ">")
+
+
+HUMANIZER = None
 
 
 def gloss_line(lex, ugl):
@@ -82,7 +85,7 @@ def main(argv=None):
     for name in ("encode", "decode", "roundtrip"):
         p = sub.add_parser(name)
         p.add_argument("text", nargs="+")
-        p.add_argument("--gloss", action="store_true", help="also print tokens as English lemmas")
+        p.add_argument("--gloss", action="store_true", help="also print the readable view (tokens as English words)")
     s = sub.add_parser("sample")
     s.add_argument("--n", type=int, default=15)
     s.add_argument("--seed", type=int, default=None)
@@ -109,12 +112,15 @@ def main(argv=None):
     if a.cmd == "export":
         return export(a.dictionary, a.out)
 
+    global HUMANIZER
     lex, enc, dec = load()
+    from .humanize import Humanizer
+    HUMANIZER = Humanizer(lex, dec)
     if a.cmd == "encode":
         for line in enc.encode(" ".join(a.text)):
             print(line)
             if a.gloss:
-                print("  ", gloss_line(lex, line))
+                print("  ", HUMANIZER(line))
     elif a.cmd == "decode":
         print(dec.decode(" ".join(a.text)))
     elif a.cmd == "roundtrip":

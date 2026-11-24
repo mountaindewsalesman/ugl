@@ -4,7 +4,9 @@
 //               {type: "ready", info}
 //               {type: "result", id, data} | {type: "error", id?, message}
 const PYODIDE_VERSION = "314.0.7";
-const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+// Pyodide is served from this site (tools/build_playground.py downloads this
+// exact version into pyodide/), so nothing is loaded cross-origin.
+const PYODIDE_URL = new URL("pyodide/", self.location.href).href;
 importScripts(PYODIDE_URL + "pyodide.js");
 
 const LIB = "/home/pyodide/lib";

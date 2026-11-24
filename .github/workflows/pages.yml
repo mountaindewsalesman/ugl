@@ -47,7 +47,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pyodide" && npm install --prefix "$RUNNER_TEMP/pyodide" "pyodide@$PYODIDE"
           python -m http.server -d _site 8000 &
           sleep 2
-          NODE_PATH="$RUNNER_TEMP/pyodide/node_modules" node tools/playground_smoke.js http://localhost:8000/ "$RUNNER_TEMP/smoke.json"
+          NODE_PATH="$RUNNER_TEMP/pyodide/node_modules" node tools/playground_smoke.js http://localhost:8000/ "$RUNNER_TEMP/smoke.json" _site
           python tools/build_playground.py --out _site --compare "$RUNNER_TEMP/smoke.json"
 
       - uses: actions/configure-pages@v5

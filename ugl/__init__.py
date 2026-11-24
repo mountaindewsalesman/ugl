@@ -26,6 +26,8 @@ class UGL:
         self.lexicon = Lexicon(dictionary)
         self.decoder = Decoder(self.lexicon)
         self.tokenizer = Tokenizer(self.lexicon)
+        from .humanize import Humanizer
+        self.humanizer = Humanizer(self.lexicon, self.decoder)
         self._encoder = None
         self._want_wsd = wsd
 
@@ -49,6 +51,10 @@ class UGL:
     def decode(self, ugl_text):
         """UGL (one sentence per line) -> English."""
         return self.decoder.decode(ugl_text)
+
+    def humanize(self, ugl_text):
+        """UGL -> the same tokens as English words, e.g. 'someone has three apples \\has'."""
+        return self.humanizer(ugl_text)
 
     def to_ids(self, text, bos=True, eos=True):
         """English text -> token ids."""
@@ -97,6 +103,10 @@ def encode(text, keep_memory=False):
 
 def decode(ugl_text):
     return default().decode(ugl_text)
+
+
+def humanize(ugl_text):
+    return default().humanize(ugl_text)
 
 
 def to_ids(text, bos=True, eos=True):

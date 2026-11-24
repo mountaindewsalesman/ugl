@@ -5,13 +5,16 @@
 //   python tools/build_playground.py
 //   python -m http.server -d _site 8000
 //   npm install pyodide@314.0.7        (in any folder; set NODE_PATH to it)
-//   node tools/playground_smoke.js http://localhost:8000/ smoke.json
+//   node tools/playground_smoke.js http://localhost:8000/ smoke.json _site
 //
 // smoke.json gets the Pyodide-side results; then
 //   python tools/build_playground.py --compare smoke.json
 // checks them against CPython running the same files.
-const fs = require("fs"), vm = require("vm");
-const [,, base, outPath = "playground-smoke.json"] = process.argv;
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const [,, base, outPath = "playground-smoke.json", siteDir = "_site"] = process.argv;
+// Node's Pyodide loader reads files from disk: point it at the SAME runtime
+// files the site serves (siteDir/pyodide/), so those exact files are tested.
+const pyodideDir = path.resolve(siteDir, "pyodide") + path.sep;
 const { loadPyodide } = require("pyodide");
 const pending = new Map();
 let nextId = 1, readyRes, readyRej;
@@ -28,8 +31,9 @@ const self = {
 };
 const ctx = {
   self, fetch, URL, console, Uint8Array, JSON, Number, String, Error, Promise, setTimeout,
-  // the page loads pyodide.js from the CDN; here the npm package of the same version
-  importScripts: () => { ctx.loadPyodide = (opts) => loadPyodide({ ...opts, indexURL: undefined }); },
+  // the page importScripts() its self-hosted pyodide.js; here the npm loader
+  // of the same version, reading the self-hosted runtime + numpy from disk
+  importScripts: () => { ctx.loadPyodide = (opts) => loadPyodide({ ...opts, indexURL: pyodideDir }); },
 };
 vm.createContext(ctx);
 (async () => {

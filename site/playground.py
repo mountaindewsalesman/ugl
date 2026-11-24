@@ -98,6 +98,7 @@ def analyze(text):
             s["error"] = str(e)
             sentences.append(s)
             continue
+        s["readable"] = U.humanize(line)
         s["gloss"] = gloss_line(U.lexicon, line)
         try:
             s["back"] = U.decode(line)

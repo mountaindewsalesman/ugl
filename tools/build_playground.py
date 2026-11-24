@@ -11,6 +11,9 @@ What it produces:
                     into Pyodide so the browser runs this repo's own decoder,
                     tokenizer and lexicon
   * wheels/         the lemminflect wheel the decoder imports (pure Python)
+  * pyodide/        the Pyodide runtime + numpy, served from the same origin
+                    (browsers refuse cross-origin module loads inside workers,
+                    and the site then has no third-party runtime dependency)
   * gallery.json    the English examples in site/gallery.txt, encoded by the
                     REAL encoder (spaCy en_core_web_md) at build time
   * manifest.json   versions and file names the page loads
@@ -74,6 +77,47 @@ def fetch_wheel(name, out_dir):
     if not wheels[0].endswith("-none-any.whl"):
         sys.exit(f"{wheels[0]} is not a pure-Python wheel; Pyodide cannot install it")
     return wheels[0]
+
+
+PYODIDE_CORE = ["pyodide.js", "pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm",
+                "python_stdlib.zip", "pyodide-lock.json"]
+
+
+def pyodide_version():
+    """The single source of truth is the constant in site/worker.js."""
+    import re
+    with open(os.path.join(SITE, "worker.js"), encoding="utf-8") as f:
+        m = re.search(r'PYODIDE_VERSION = "([^"]+)"', f.read())
+    if not m:
+        sys.exit("PYODIDE_VERSION not found in site/worker.js")
+    return m.group(1)
+
+
+def fetch_pyodide(version, out_dir, packages=("numpy",)):
+    """Download the Pyodide runtime and the named packages (+ dependencies)."""
+    import urllib.request
+    base = f"https://cdn.jsdelivr.net/pyodide/v{version}/full/"
+    os.makedirs(out_dir, exist_ok=True)
+
+    def get(name):
+        dst = os.path.join(out_dir, name)
+        with urllib.request.urlopen(base + name, timeout=120) as r, open(dst, "wb") as f:
+            shutil.copyfileobj(r, f)
+        return dst
+
+    for name in PYODIDE_CORE:
+        get(name)
+    with open(os.path.join(out_dir, "pyodide-lock.json"), encoding="utf-8") as f:
+        lock = json.load(f)["packages"]
+    todo, seen = list(packages), set()
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        get(lock[p]["file_name"])
+        todo += lock[p].get("depends", [])
+    return sorted(seen)
 
 
 def encode_gallery(sentences):
@@ -170,6 +214,10 @@ def main(argv=None):
     print("downloading lemminflect wheel")
     wheel = fetch_wheel("lemminflect", os.path.join(out, "wheels"))
 
+    pv = pyodide_version()
+    print(f"downloading Pyodide {pv} runtime + numpy")
+    py_pkgs = fetch_pyodide(pv, os.path.join(out, "pyodide"))
+
     print("encoding gallery with the real encoder")
     items, model = encode_gallery(read_gallery())
     with open(os.path.join(out, "gallery.json"), "w", encoding="utf-8") as f:
@@ -182,6 +230,7 @@ def main(argv=None):
         "bundle": "ugl-py.zip",
         "bundle_bytes": os.path.getsize(os.path.join(out, "ugl-py.zip")),
         "wheels": [f"wheels/{wheel}"],
+        "pyodide": {"version": pv, "path": "pyodide/", "packages": py_pkgs},
         "gallery": {"file": "gallery.json", "spacy": md.version("spacy"), "model": model,
                     "sense_choice": "most frequent sense"},
         "commit": commit,

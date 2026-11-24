@@ -78,6 +78,13 @@ def test_parentheses_ignored():
     assert enc("John (a doctor) ate.") == enc("John ate.")
 
 
+def test_humanize():
+    h = U.humanize
+    assert h(r"n4 v2 #3 n2344s \v2") == r"someone has three apples \has"
+    assert h(r"#9 v20 n1 v444p n2344t \v20") == r"nine time I ate the apple \time"
+    assert h("n136t v117p n1") == "the man saw me"
+
+
 def test_public_api():
     assert ugl.decode(ugl.encode("I ate the apple.")[0]) == "I ate the apple."
     ids = ugl.to_ids("Every dog barks.")
@@ -92,5 +99,6 @@ if __name__ == "__main__":
     test_roundtrip_readable()
     test_tokenizer_roundtrip()
     test_parentheses_ignored()
+    test_humanize()
     test_public_api()
     print("all tests passed")

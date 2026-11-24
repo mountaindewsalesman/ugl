@@ -158,6 +158,7 @@ function renderResults(data) {
     if (s.error) {
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "ERROR"), el("span", { class: "error" }, s.error)));
     } else {
+      rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "READ"), el("span", { class: "readable" }, s.readable)));
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "GLOSS"), el("span", { class: "mono gloss" }, s.gloss)));
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "BACK"),
         s.back_error ? el("span", { class: "error" }, "decode error: " + s.back_error) : el("span", { class: "back" }, s.back)));
