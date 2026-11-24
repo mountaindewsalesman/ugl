@@ -17,6 +17,7 @@ class Attr:
     kind: str = "adj"          # adj | noun | name
     mods: str = ""             # r z l w x  (more, most, less, very, not)
     pos: Optional[int] = None  # token index, for sense choice
+    adverb: bool = False       # came from an adverb (look it up as one: "away", "twice")
 
 
 @dataclass
@@ -70,7 +71,8 @@ class Event:
     mods: str = ""                    # p f g k h c m u q o x
     subj: Optional[Entity] = None
     obj: Optional[Entity] = None
-    manner: List[Attr] = field(default_factory=list)        # adverbs / predicate adjectives
+    manner: List[Attr] = field(default_factory=list)        # adverbs ("quickly", "unfortunately")
+    pred_attrs: List[Attr] = field(default_factory=list)    # predicate adjectives of "be" ("is tall")
     comps: List["Event"] = field(default_factory=list)      # clause complements (say that ..., want to ...)
     rels: List[Rel] = field(default_factory=list)           # wrapped around the clause, outermost first
     coord: List[tuple] = field(default_factory=list)        # (logic name, Event)

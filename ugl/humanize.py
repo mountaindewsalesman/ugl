@@ -9,7 +9,7 @@ relation order, repeated nouns) stays visible.  It reuses the decoder's
 inflection so both agree on word forms.
 """
 from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, parse_literal
-from .decoder import PRON, SPECIAL, Decoder, Tok, inflect, parse_tok
+from .decoder import PRON, SPECIAL, Decoder, Tok, inflect, parse_tok, pron_key
 
 NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
                 "fourteen fifteen sixteen seventeen eighteen nineteen twenty").split()
@@ -63,7 +63,7 @@ class Humanizer:
     def noun(self, t, obj=False):
         m = t.mods
         if t.cls == "n" and t.idx in RESERVED_NOUNS:
-            key = t.base + ("s" if "s" in m else "")
+            key = pron_key(t.base, m)
             if key in PRON and not set(m) & set("xq"):
                 word = PRON[key][2] if "y" in m else PRON[key][1 if obj else 0]
                 return word

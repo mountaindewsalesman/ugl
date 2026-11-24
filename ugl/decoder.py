@@ -218,14 +218,24 @@ class Parser:
 
 # ------------------------------------------------------------- realiser
 PRON = {"n1": ("I", "me", "my"), "n1s": ("we", "us", "our"), "n2": ("you", "you", "your"),
-        "n2s": ("you", "you", "your")}
+        "n2s": ("you", "you", "your"),
+        # "the thing(s)" re-mentioned (an unresolved it / they)
+        "n3t": ("it", "it", "its"), "n3ts": ("they", "them", "their")}
+
+
+def pron_key(base, mods):
+    """PRON table key for a reserved noun with its modifier letters."""
+    return base + ("t" if base == "n3" and "t" in mods else "") + ("s" if "s" in mods else "")
 SPECIAL = {  # reserved noun + modifier -> word
     ("n3", "q"): "what", ("n3", "x"): "nothing", ("n3", "d"): "this", ("n3", "e"): "that",
-    ("n3", ""): "something", ("n3", "s"): "things", ("n3", "t"): "it", ("n3", "ds"): "these", ("n3", "es"): "those",
+    ("n3", ""): "something", ("n3", "s"): "things", ("n3", "ds"): "these", ("n3", "es"): "those",
     ("n4", "q"): "who", ("n4", "x"): "nobody", ("n4", ""): "someone", ("n4", "s"): "people",
     ("n5", "q"): "where", ("n5", "d"): "here", ("n5", "e"): "there",
     ("n6", "q"): "when", ("n6", "d"): "now", ("n6", "e"): "then",
     ("n7", "q"): "how", ("n8", "q"): "why", ("n9", "q"): "how much",
+    ("n3", "t"): "the thing", ("n3", "ts"): "the things",
+    ("n4", "t"): "the person", ("n5", "t"): "the place", ("n6", "t"): "the time",
+    ("n7", "t"): "the way", ("n8", "t"): "the reason", ("n9", "t"): "the amount",
 }
 ADVERBIAL = {("n5", "q"), ("n5", "d"), ("n5", "e"), ("n6", "q"), ("n6", "d"), ("n6", "e"),
              ("n7", "q"), ("n8", "q")}
@@ -262,6 +272,8 @@ def adverb_form(adj):
         return adj[:-1] + "ily"
     if adj.endswith("le"):
         return adj[:-1] + "y"
+    if adj.endswith("ue"):                      # true -> truly, due -> duly
+        return adj[:-1] + "ly"
     if adj.endswith("ic"):
         return adj + "ally"
     return adj + "ly"
@@ -337,15 +349,22 @@ class Decoder:
     def np(self, np, ctx, case="subj"):
         h = np.head
         if h.kind == "word" and h.cls == "n" and h.idx in RESERVED_NOUNS:
-            key = h.base + ("s" if "s" in h.mods else "")
-            if key in PRON and not ("x" in h.mods or "q" in h.mods):
+            key = pron_key(h.base, h.mods)
+            if key in PRON and not ("x" in h.mods or "q" in h.mods) and not np.rels and not np.adjs:
                 p = PRON[key]
                 return p[0] if case == "subj" else p[1] if case == "obj" else p[2]
             m = "".join(c for c in h.mods if c in "qxdets")
             word = SPECIAL.get((h.base, m)) or SPECIAL.get((h.base, m.replace("s", ""))) or RESERVED_NOUNS[h.idx]
+            words = [word] + [self.adj(a) for a in np.adjs]
+            for r in np.rels:                       # "someone who can help"
+                sub = Ctx()
+                sub.gap = h.base
+                sub.gap_word = "who" if h.base == "n4" else "that"
+                words.append(self.clause(r, sub))
+            s = " ".join(w for w in words if w)
             if case == "poss":
-                word += "'s"
-            return " ".join([word] + [self.adj(a) for a in np.adjs])
+                s += "'s"
+            return s
         noun = self.lemma(h)
         plural = "s" in h.mods
         if h.kind == "word" and h.cls == "nv":
@@ -491,7 +510,10 @@ class Decoder:
             return f"when {a}, {b}"
         if r == V["during"]:
             return f"while {a}, {b}"
-        return f"{b} {name} {a}"
+        if isinstance(c.a, Core) and isinstance(c.b, Core) and c.a.subj.head.base == c.b.subj.head.base:
+            a = self.core(c.a, ctx, gerund=True)
+        prep = REL_WORD.get(r, name)
+        return f"{b} {prep} {a}"
 
     def wrap(self, c, ctx, question=False):
         r = c.rel.idx
@@ -505,6 +527,9 @@ class Decoder:
                 self._q = True
                 return f"{word} {self.clause(c.body, ctx, question=True)}"
             return f"{self.clause(c.body, ctx, question)} {word}"
+        if r == V["with"] and c.land.head.base == "n7" and c.land.adjs and not c.land.head.mods:
+            advs = " ".join(self.adj(a, adverb=True) for a in c.land.adjs)
+            return f"{advs}, {self.clause(c.body, ctx, question)}"
         prep = REL_WORD.get(r, RESERVED_VERBS[r][0])
         if "x" in c.rel.mods:
             prep = {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
@@ -515,8 +540,17 @@ class Decoder:
         land = self.np(c.land, ctx, "obj")
         return f"{body} {prep} {land}".strip()
 
-    def core(self, c, ctx, question=False, infinitive=False):
+    def core(self, c, ctx, question=False, infinitive=False, gerund=False):
         v = c.verb
+        if gerund:
+            lemma = RESERVED_VERBS[v.idx][0] if v.kind == "word" and v.idx in RESERVED_VERBS else self.lemma(v)
+            copula = v.kind == "word" and v.idx == V["be"]
+            parts = (["not"] if "x" in v.mods else []) + [inflect(lemma, "VBG")]
+            parts += [self.adj(a, adverb=not copula) for a in c.advs]
+            if c.obj is not None:
+                parts.append(self.np(c.obj, ctx, "obj"))
+            parts += [self.complement(x, c, ctx) for x in c.comps]
+            return " ".join(p for p in parts if p)
         if infinitive:
             lemma = RESERVED_VERBS[v.idx][0] if v.kind == "word" and v.idx in RESERVED_VERBS else self.lemma(v)
             copula = v.kind == "word" and v.idx == V["be"]
@@ -546,7 +580,7 @@ class Decoder:
             obj = self.np(c.obj, ctx, "obj")
         comps = [self.complement(x, c, ctx) for x in c.comps]
         if copula and not advs and not obj and not comps:
-            after = after + ["present"] if not before else after
+            pass
         parts = before + [subj] + after + advs + [obj] + comps
         s = " ".join(p for p in parts if p)
         if obj_gap:

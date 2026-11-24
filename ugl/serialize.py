@@ -27,7 +27,7 @@ class Serializer:
             r = self.lex.encode_word(lemma, "r", mods, sent=sent)
         if r is None:
             self.unknown.add((lemma, cls))
-            return [literal("unk", lemma, mods, cls)]
+            return [literal("unk", lemma, mods, "a" if cls == "r" else cls)]
         return r
 
     # ------------------------------------------------------------- nouns
@@ -102,9 +102,18 @@ class Serializer:
         if a.kind == "noun":
             t = self.word(a.lemma, "n", pos=a.pos)
             return [add_mods(t[0], "j")] + t[1:]
-        return self.word(a.lemma, "a", a.mods, pos=a.pos)
+        return self.word(a.lemma, "r" if a.adverb else "a", a.mods, pos=a.pos)
 
     # ------------------------------------------------------------- clauses
+    @staticmethod
+    def indefinite(e):
+        """'there is X' only for indefinite things; 'I am in Plano' keeps its verb."""
+        if e is None:
+            return True
+        if e.kind == "coord":
+            return all(Serializer.indefinite(m) for m in e.members)
+        return e.ref is None and e.kind == "lex" and not e.det and e.possessor is None
+
     def verb(self, ev):
         if ev.pred in ("be", "exist"):
             return [tok("v", V["be"], ev.mods)]
@@ -114,12 +123,16 @@ class Serializer:
 
     def core(self, ev, subj, obj, quants):
         s = self.np(subj, quants) if subj is not None else ["n3t"]
-        if ev.pred == "exist" and obj is None and not ev.manner and not ev.comps:
-            return s                                     # bare noun phrase: "there is X"
+        if ev.pred == "exist" and obj is None and not ev.pred_attrs and not ev.comps \
+                and not ev.mods and self.indefinite(subj):
+            return s                                     # bare noun phrase: "there is a dog"
         vt = self.verb(ev)
         out = s + vt
-        for a in ev.manner:
+        for a in ev.pred_attrs:                      # "is tall": only "be" has these
             out += self.attr(a)
+        if ev.pred not in ("be", "exist"):           # after "be" the slot means a predicate adjective,
+            for a in ev.manner:                      # so manner goes into a "with an X way" relation there
+                out += self.attr(a)
         if obj is not None:
             out += self.np(obj, quants)
         m = WORD.match(vt[0])
@@ -155,6 +168,9 @@ class Serializer:
     def clause(self, ev):
         quants = []
         out = self.distribute(ev, quants)
+        if ev.pred in ("be", "exist") and ev.manner:
+            way = Entity("reserved", "n7", attrs=list(ev.manner))
+            out = self.np(way, quants) + [tok("v", V["with"])] + out + [f"\\v{V['with']}"]
         for r in reversed(ev.rels):
             i = V[r.rel]
             if isinstance(r.landmark, Event):

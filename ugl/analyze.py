@@ -143,6 +143,7 @@ class Analyzer:
     # =============================================================== entry
     def sentence(self, sent, question=False):
         self.toks = build_tokens(sent)
+        self.relheads = {}                       # token index of a relative word -> its head entity
         roots = [t for t in self.toks if t.head < 0]
         if not roots:
             return None
@@ -160,7 +161,7 @@ class Analyzer:
         """Build the Event headed by token v (a verb, or a nominal/adjectival predicate)."""
         cop = v.dep1("cop")
         ev = Event(pred="verb", lemma=v.lemma, pos=v.i)
-        passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass"))
+        passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass", "obl:agent"))
 
         # ---- predicate type
         nominal = v.upos not in ("VERB", "AUX") or cop is not None
@@ -174,7 +175,7 @@ class Analyzer:
         if nominal:
             ev.pred, ev.lemma, ev.pos = "be", "be", (cop.i if cop is not None else v.i)
             if v.upos in ("ADJ", "ADV") or (v.upos == "VERB" and cop is not None):
-                ev.manner.append(self.attr(v))
+                ev.pred_attrs.append(self.attr(v))
             elif v.dep("case") and cop is not None:
                 # "John is in the house": be + relation
                 ev.pred = "exist"
@@ -211,11 +212,11 @@ class Analyzer:
             ev.subj = self.entity(subj)
         elif inherit_subj is not None:
             ev.subj = refer(inherit_subj)
-        elif "Imp" in (v.f("Mood") or "") or (v.head < 0 and v.xpos == "VB"):
+        elif not v.dep("aux", "aux:pass") and ("Imp" in (v.f("Mood") or "") or (v.head < 0 and v.xpos == "VB")):
             ev.subj = Entity("reserved", "n2")
             ev.mods += "o"
         else:
-            ev.subj = Entity("reserved", "n3", det="t")
+            ev.subj = Entity("reserved", "n4")
         if ev.pred in ("verb", "have", "be") and not nominal:
             o = v.dep1("obj")
             if o is not None:
@@ -271,18 +272,37 @@ class Analyzer:
         w = k.lower
         if w in ("not", "n't", "never"):
             return                                     # handled in verb_mods
+        if k.i in self.relheads and w in DEICTIC:     # "the place where I live": at <the place>
+            ev.rels.append(Rel(DEICTIC[w][2], refer(self.relheads[k.i])))
+            return
         if w in DEICTIC:
             if k.head >= 0 and self.toks[k.head].deprel in ("advcl", "acl:relcl") and DEICTIC[w][1] == "q":
                 return                                 # subordinator ("when he left"), used by parent
             tokn, mod, rel = DEICTIC[w]
+            if mod == "q" and self.embedded(k):
+                mod = "t"                              # "I know where X" = the place at which X
             ev.rels.append(Rel(rel, Entity("reserved", tokn + mod)))
             return
         if w in TIME_NOUN_ADV and self.lex.senses(w, "n"):
             ev.rels.append(Rel("time", Entity("lex", w, pos=k.i)))
             return
+        for o in k.dep("obl", "nmod", "obl:npmod"):     # "away [from the stock]"
+            ev.rels.append(self.rel_from_case(o))
         if w in ("also", "too", "just", "even", "only", "then", "so", "still", "already"):
             return                                     # discourse particles: no content in UGL v0
         ev.manner.append(self.attr(k))
+
+    EMBEDDED = {"ccomp", "xcomp", "advcl", "acl", "acl:relcl", "csubj", "csubj:pass"}
+
+    def embedded(self, t):
+        """Is token t inside a subordinate / complement clause?"""
+        seen = set()
+        while t.head >= 0 and t.i not in seen:
+            seen.add(t.i)
+            if t.deprel in self.EMBEDDED:
+                return True
+            t = self.toks[t.head]
+        return False
 
     def rel_from_case(self, k):
         """obl / nmod with its case marker -> Rel(relation, landmark)."""
@@ -322,7 +342,10 @@ class Analyzer:
             if wh is not None:
                 words = [wh.lower]
         key = " ".join(words)
-        rel = SUBORD.get(key) or (SUBORD.get(words[0]) if words else None) or "time"
+        if words:
+            rel = (SUBORD.get(key) or SUBORD.get(words[0]) or PREP.get(key) or PREP.get(words[0]) or "of")
+        else:
+            rel = "time"                               # bare participial clause: "Running, he fell"
         sub = self.clause(k, inherit_subj=main.subj)
         if key == "unless":
             sub.mods += "x"
@@ -335,7 +358,7 @@ class Analyzer:
                 # "made him happy", "seems happy", "elected him president"
                 e = Event(pred="be", lemma="be", subj=refer(ctrl) if ctrl else None)
                 if k.upos == "ADJ":
-                    e.manner.append(self.attr(k))
+                    e.pred_attrs.append(self.attr(k))
                 else:
                     e.obj = self.entity(k)
                 return e
@@ -355,11 +378,32 @@ class Analyzer:
         lemma = t.lemma
         if t.upos == "VERB":       # participle as adjective: try the surface form first
             lemma = t.lower if self.lex.senses(t.lower, "a") else t.lemma
-        return Attr(lemma, "adj", mods, t.i)
+        return Attr(lemma, "adj", mods, t.i, adverb=t.upos == "ADV")
 
     def entity(self, t):
+        return self.coordinate(t, self.head_entity(t))
+
+    def coordinate(self, t, e):
+        """'X and Y': a coordination node around X; X keeps its identity, so its
+        own relative clauses still refer to X alone."""
+        conj = [c for c in t.dep("conj") if c.upos in ("NOUN", "PROPN", "PRON", "NUM") and not c.dep("cop", "nsubj")]
+        if not conj:
+            return e
+        cc = next((g for c in conj for g in c.dep("cc")), None)
+        members = [e] + [self.head_entity(c) for c in conj]
+        return Entity("coord", members=members, logic=CC.get(cc.lower if cc else "and", "and"), pos=e.pos)
+
+    def head_entity(self, t):
         if t.upos == "PRON" or (t.upos == "DET" and t.deprel not in ("det",)):
-            return self.pronoun(t)
+            e = self.pronoun(t)
+            of = next((c for c in t.dep("nmod") if any(k.lower == "of" for k in c.dep("case"))), None)
+            if e.kind == "reserved" and e.quant and of is not None:
+                inner = self.entity(of)                # "all of my wine": the quantifier ranges over my wine
+                inner.quant = e.quant
+                return inner
+            if e.kind == "reserved":                   # "someone who can help", "something new"
+                self.np_mods(t, e)
+            return e
         if t.upos == "NUM" or (t.xpos == "CD"):
             e = Entity("num", number_literal(t), pos=t.i)
             self.np_mods(t, e)
@@ -389,8 +433,10 @@ class Analyzer:
         w, pt = t.lower, t.f("PronType")
         person = t.f("Person")
         plural = t.f("Number") == "Plur"
+        if t.i in self.relheads:
+            return refer(self.relheads[t.i])       # relative pronoun = its head noun
         if pt == "Rel":
-            e = Entity("pronoun", w, pos=t.i)      # resolved to the relative clause head by the caller
+            e = Entity("pronoun", w, pos=t.i)      # free relative without a head
             e.person = 3
             return e
         if person == "1":
@@ -398,7 +444,10 @@ class Analyzer:
         if person == "2":
             return Entity("reserved", "n2")
         if pt == "Int" or w in ("what", "who", "whom", "which"):
-            return Entity("reserved", "n4" if w in ("who", "whom") else "n3", question=True)
+            tokn = "n4" if w in ("who", "whom") else "n3"
+            if self.embedded(t):                       # "do what I want" = the thing that I want
+                return Entity("reserved", tokn, det="t", pos=t.i)
+            return Entity("reserved", tokn, question=True)
         if pt == "Dem" or w in ("this", "that", "these", "those"):
             return Entity("reserved", "n3", det="d" if w in ("this", "these") else "e", plural=w in ("these", "those"))
         if w in ("something", "anything"):
@@ -466,32 +515,21 @@ class Analyzer:
                 e.restrictors.append(self.relative(c, e))
             elif d == "acl":
                 e.restrictors.append(self.participle(c, e))
-            elif d == "conj" and c.upos in ("NOUN", "PROPN", "PRON", "NUM"):
-                pass   # collected by coordinate() below
-        conj = [c for c in t.dep("conj") if c.upos in ("NOUN", "PROPN", "PRON", "NUM") and not c.dep("cop", "nsubj")]
-        if conj:
-            members = [self.entity(c) for c in conj]
-            cc = next((g for c in conj for g in c.dep("cc")), None)
-            first = Entity(**{k: getattr(e, k) for k in e.__dataclass_fields__})
-            e.__init__("coord", members=[first] + members, logic=CC.get(cc.lower if cc else "and", "and"))
 
     def relative(self, c, head):
-        """acl:relcl: the relative pronoun (or the gap) becomes a re-mention of head."""
-        relpron = [k for k in c.kids if k.f("PronType") == "Rel" or
-                   (k.lower in ("who", "whom", "which", "that") and k.deprel in ("nsubj", "obj", "nsubj:pass", "obl"))]
+        """acl:relcl.  Relative words (who/which/that, and where/when/why) are
+        registered BEFORE the clause is read, so they resolve to the head as soon
+        as they are met, and anything that inherits them (the subject of "to do"
+        in "someone who can manage to do X") refers to the head too."""
+        relwords = [k for k in c.kids if k.f("PronType") == "Rel" or
+                    (k.lower in ("who", "whom", "which", "that", "whose") and
+                     k.deprel in ("nsubj", "obj", "nsubj:pass", "obl", "nmod:poss"))]
+        relwords += [k for k in c.dep("advmod") if k.lower in ("where", "when", "why")]
+        for k in relwords:
+            self.relheads[k.i] = head
         ev = self.clause(c)
         ref = lambda: refer(head)
-
-        def fix(x):
-            return ref() if (x is not None and x.kind == "pronoun" and x.lemma in ("who", "whom", "which", "that")) else x
-        ev.subj, ev.obj = fix(ev.subj), fix(ev.obj)
-        for r in ev.rels:
-            if isinstance(r.landmark, Entity):
-                r.landmark = fix(r.landmark)
-        for r in ev.rels:      # "the place where I live": where -> at <head>
-            if isinstance(r.landmark, Entity) and r.landmark.kind == "reserved" and r.landmark.lemma in ("n5q", "n6q", "n8q", "n7q"):
-                r.landmark = ref()
-        if not relpron and not any(r for r in ev.rels if isinstance(r.landmark, Entity) and r.landmark.ref is head):
+        if not relwords:
             # "the book I read": gap in object position (or subject if none)
             if ev.obj is None and ev.subj is not None and ev.subj.ref is not head and ev.pred == "verb":
                 ev.obj = ref()
