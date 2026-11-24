@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGL Playground</title>
+<meta name="description" content="Decode, tokenize and inspect UGL, a numbered-concept language for English, running the real ugl Python package in your browser.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="wrap">
+  <h1>UGL playground</h1>
+  <p class="lede">UGL writes English as numbered concepts with explicit grammar.
+    This page runs the <a href="https://github.com/mountaindewsalesman/ugl">ugl</a> package from
+    <code>main</code> in your browser (Python via Pyodide): decoding, the tokenizer and the dictionary
+    are all live.</p>
+  <div id="status" class="status" role="status" aria-live="polite">
+    <div class="status-label"><span id="status-text">Starting...</span><span id="status-num"></span></div>
+    <div class="bar"><div id="bar-fill" class="bar-fill indeterminate"></div></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="panel" aria-labelledby="en-h">
+    <h2 id="en-h">English &rarr; UGL</h2>
+    <p class="hint">Pick an example. These were encoded by the real encoder (spaCy
+      <span data-info="model">en_core_web_md</span>) when this site was built.</p>
+    <div id="examples" class="chips"></div>
+    <details class="more">
+      <summary>All <span id="gallery-count"></span> examples</summary>
+      <ul id="gallery-list" class="gallery-list"></ul>
+    </details>
+    <label class="field">
+      <span>English</span>
+      <textarea id="en" rows="2" spellcheck="true" placeholder="Pick an example above, or type English"></textarea>
+    </label>
+    <div id="en-note" class="note" hidden>
+      <p><strong>Live English encoding needs the local install.</strong> The encoder parses English
+        with spaCy, which does not run in the browser yet, so this page only has the examples above.
+        To encode your own text:</p>
+      <pre class="cmd"><code id="install-cmd">pip install git+https://github.com/mountaindewsalesman/ugl.git</code><button class="copy" data-copy="install-cmd" type="button">Copy</button></pre>
+      <pre class="cmd"><code id="run-cmd"></code><button class="copy" data-copy="run-cmd" type="button">Copy</button></pre>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="ugl-h">
+    <h2 id="ugl-h">UGL &rarr; English</h2>
+    <label class="field">
+      <span>UGL <small>(one sentence per line; edit freely)</small></span>
+      <textarea id="ugl" class="mono" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="#9 v20 n1 v444p n2344t \v20"></textarea>
+    </label>
+    <div id="results" aria-live="polite"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="ids-h">
+    <h2 id="ids-h">Tokenizer ids</h2>
+    <p class="hint">What <code>UGL().tokenizer.encode(ugl, bos=True, eos=True)</code> returns.
+      Each concept is one id, modifiers are separate ids, and literals are spelled out.</p>
+    <div id="ids"></div>
+  </section>
+
+  <section class="panel ref" aria-labelledby="ref-h">
+    <h2 id="ref-h">Reading UGL</h2>
+    <ul>
+      <li><code>n#</code> noun, <code>v#</code> verb, <code>a#</code> adjective/adverb, <code>nv#</code> verb used as a noun.
+        Letters after the number are modifiers (<code>v444p</code> = ate).</li>
+      <li><code>\v#</code> closes the scope opened by verb <code>#</code>. <code>#9</code> is a number,
+        <code>'John'</code> a name, <code>n?word</code> a word not in the dictionary.</li>
+      <li>Order is subject, verb, adverbs, object. Modifiers follow their head. Hover or tap a token for details.</li>
+    </ul>
+    <p>Full spec: <a href="https://github.com/mountaindewsalesman/ugl/blob/main/SPEC.md">SPEC.md</a>.</p>
+  </section>
+</main>
+
+<footer class="wrap" id="footer"></footer>
+<script src="app.js"></script>
+</body>
+</html>

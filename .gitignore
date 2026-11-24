@@ -15,3 +15,7 @@ data/compounds.tsv
 dictionary-export/
 data/wsd/
 ugl/models/*.npz
+
+# playground build output (tools/build_playground.py)
+_site/
+playground-smoke.json

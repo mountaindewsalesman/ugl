@@ -1,0 +1,29 @@
+# English examples for the playground gallery, one per line.
+# tools/build_playground.py encodes each line with the real encoder at deploy
+# time.  A line can hold several sentences (pronouns resolve across them).
+# The first 8 become the one-click example buttons.
+At nine, I ate the apple.
+The man who left saw me.
+Every dog barks.
+I stayed because it rained.
+Mary said that John left.
+The dog was bitten by the cat.
+John has a dog. He loves it.
+We will have eaten.
+I want to eat.
+Did you eat?
+John did not eat.
+John's dog is big.
+I ate quickly.
+I ate without John.
+She gave the book to John.
+If it rains, we will stay at home.
+The children played in the garden after school.
+Most students read many books.
+The old woman who lives near the river sold her house.
+Can you help me?
+The kitchen table is very small.
+Paris is the capital of France.
+In 1990, the company built a new factory in Ohio.
+Nobody knows why the bridge collapsed.
+I think that you should leave now.
