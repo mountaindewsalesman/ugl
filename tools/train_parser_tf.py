@@ -306,6 +306,8 @@ def main():
     ap.add_argument("--no-wsd", action="store_true")
     ap.add_argument("--amp", action="store_true", help="bf16 mixed precision on the GPU")
     ap.add_argument("--resume", action="store_true", help="continue from <out>.ckpt.pt after an interruption")
+    ap.add_argument("--ckpt-min", type=float, default=15.0,
+                    help="also checkpoint mid-epoch every this many minutes, so a killed run loses little")
     a = ap.parse_args()
     global DEVICE, MODEL
     DEVICE, MODEL = torch.device(a.device), a.model
@@ -360,24 +362,43 @@ def main():
 
     best, best_state, start = -1, None, 1
     ckpt = a.out + ".ckpt.pt"
+    mid = None                                     # where to pick up inside an epoch
     if a.resume and os.path.exists(ckpt):          # continue an interrupted run
         c = torch.load(ckpt, map_location=DEVICE, weights_only=False)
         net.load_state_dict(c["net"])
         opt.load_state_dict(c["opt"])
         sched.load_state_dict(c["sched"])
-        best, best_state, start = c["best"], c["best_state"], c["epoch"] + 1
+        best, best_state = c["best"], c["best_state"]
         random.setstate(c["rng"])
-        print(f"resumed after epoch {c['epoch']} (best dev score {best:.4f})", flush=True)
+        if c.get("step") is not None:              # saved mid-epoch: redo the rest of that epoch
+            start, mid = c["epoch"], c
+            print(f"resumed in epoch {c['epoch']} at step {c['step']}/{len(c['batches'])}", flush=True)
+        else:
+            start = c["epoch"] + 1
+            print(f"resumed after epoch {c['epoch']} (best dev score {best:.4f})", flush=True)
+
+    def save(ep, **extra):
+        # written to a temporary file, then renamed: a checkpoint is never half-written
+        torch.save({"epoch": ep, "net": net.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                    "best": best, "best_state": best_state, "rng": random.getstate(), "step": None, **extra},
+                   ckpt + ".tmp")
+        os.replace(ckpt + ".tmp", ckpt)
+
     for ep in range(start, a.epochs + 1):
-        t0 = time.time()
-        order = sorted(range(len(E_train)), key=lambda i: len(E_train[i]["ids"]) + random.random() * 6)
-        batches = [order[i:i + a.bs] for i in range(0, len(order), a.bs)]
-        random.shuffle(batches)
-        tot_loss = 0.0
-        if W_train:
-            random.shuffle(W_train)
-        for step, bi in enumerate(batches):
-            b = batchify([E_train[i] for i in bi])
+        t0 = last_save = time.time()
+        if mid is not None:
+            batches, wperm, first, tot_loss = mid["batches"], mid["wperm"], mid["step"], mid["tot_loss"]
+            mid = None
+        else:
+            order = sorted(range(len(E_train)), key=lambda i: len(E_train[i]["ids"]) + random.random() * 6)
+            batches = [order[i:i + a.bs] for i in range(0, len(order), a.bs)]
+            random.shuffle(batches)
+            wperm = list(range(len(W_train))) if W_train else []
+            random.shuffle(wperm)
+            first, tot_loss = 0, 0.0
+        W_ep = [W_train[i] for i in wperm]
+        for step in range(first, len(batches)):
+            b = batchify([E_train[i] for i in batches[step]])
             # bf16 mixed precision (--amp): same maths, about twice as fast for base-size encoders
             with torch.autocast(DEVICE.type, dtype=torch.bfloat16, enabled=a.amp):
                 h, S, ld, lh = net(b)
@@ -392,9 +413,9 @@ def main():
                     gold = b[k][m]
                     if (gold != IGNORE).any():
                         loss = loss + F.cross_entropy(getattr(net, k)(h)[m].float(), gold, ignore_index=IGNORE)
-                if W_train:                     # one sense batch per parser batch, same optimizer step
-                    k0 = (step * a.wsd_bs) % len(W_train)
-                    w = wsd_batch(W_train[k0:k0 + a.wsd_bs] or W_train[: a.wsd_bs], lex, wp)
+                if W_ep:                        # one sense batch per parser batch, same optimizer step
+                    k0 = (step * a.wsd_bs) % len(W_ep)
+                    w = wsd_batch(W_ep[k0:k0 + a.wsd_bs] or W_ep[: a.wsd_bs], lex, wp)
                     loss = loss + F.cross_entropy(net.wsd_logits(w).float(), w["gold"])
             opt.zero_grad()
             loss.backward()
@@ -402,6 +423,10 @@ def main():
             opt.step()
             sched.step()
             tot_loss += loss.item()
+            if time.time() - last_save > a.ckpt_min * 60 and step + 1 < len(batches):
+                save(ep, step=step + 1, batches=batches, wperm=wperm, tot_loss=tot_loss)
+                last_save = time.time()
+                print(f"  checkpoint: epoch {ep} step {step + 1}/{len(batches)}", flush=True)
         up, ua, la = evaluate(net, E_dev)
         wa = wsd_eval(net, W_dev, lex, wp) if W_dev else 0.0
         print(f"epoch {ep:2}  loss {tot_loss/len(batches):.3f}  dev UPOS {up:.4f} UAS {ua:.4f} LAS {la:.4f}"
@@ -409,10 +434,7 @@ def main():
         if la + wa > best:                  # both jobs count when picking the epoch
             best = la + wa
             best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
-        # checkpoint every epoch (written to a temporary file, then renamed: never half-written)
-        torch.save({"epoch": ep, "net": net.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
-                    "best": best, "best_state": best_state, "rng": random.getstate()}, ckpt + ".tmp")
-        os.replace(ckpt + ".tmp", ckpt)
+        save(ep)                            # checkpoint every epoch
     net.load_state_dict(best_state)
     up, ua, la = evaluate(net, E_test)
     print(f"TEST  UPOS {up:.4f}  UAS {ua:.4f}  LAS {la:.4f}  (greedy heads)", flush=True)

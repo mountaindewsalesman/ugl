@@ -74,6 +74,7 @@ footer { color: var(--muted); font-size: .85rem; }
   </div>
   <nav aria-label="Versions">
     <a href="#compare">At a glance</a>
+    <a href="#next">In progress</a>
     <a href="#v030">v0.3.0 · transformer parser</a>
     <a href="#v020">v0.2.0 · own parser</a>
     <a href="#v010w">v0.1.0 + sense model</a>
@@ -103,8 +104,44 @@ footer { color: var(--muted); font-size: .85rem; }
   </table></div>
 </section>
 
+<section id="next" class="version">
+  <div class="vhead"><h2>In progress · after v0.3.0</h2><span class="tag">training now</span></div>
+  <p>The browser keeps the small parser. A second, larger parser is being trained to run only when the clean training corpus is built: a sentence goes into the corpus only if both parsers agree on the parts that change its UGL.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart LR
+  A[English sentence] --> S[Small parser<br>ELECTRA-small, 14M<br>browser + corpus]
+  A --> B[Large parser<br>ELECTRA-base, 110M<br>corpus only, training]
+  S --> U1[UGL from small parse]
+  B --> U2[UGL from large parse]
+  U1 --> C{Same UGL<br>and no flags?}
+  U2 --> C
+  C -- yes --> K[(Clean corpus)]
+  C -- no --> X[Flagged: two-parser disagreement]
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class S,B neural
+  class U1,U2,C,X rules
+  class A,K data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Status</th><th>Why</th><th>How we will know it worked</th></tr></thead>
+    <tbody>
+      <tr><td>Large parser (ELECTRA-base, 110M parameters) with the joint sense head</td><td>Training on the RTX 4060: 15 epochs on 5 UD English treebanks + SemCor, bf16</td><td>Two different-size models make different mistakes; where they agree, both are rarely wrong. A larger model is also more accurate on its own.</td><td>Dev LAS and sense accuracy above the small parser's 90.75 / 73.5%</td></tr>
+      <tr><td>Two-parser disagreement flag</td><td>Waiting on the large parser</td><td>Uncertain parses are the largest reason sentences are rejected; agreement is a second, independent check on top of calibrated confidence</td><td>The calibration table: how often kept sentences still hold a wrong head (today 2%), and how many more sentences are kept</td></tr>
+      <tr><td>Tree-level training loss (TreeCRF)</td><td>Only if still needed after the step above</td><td>Today each word picks its head on its own during training; a tree loss trains the probability of whole trees, so confidence matches what the decoder outputs</td><td>Better calibration and more clean sentences at the same error rate</td></tr>
+      <tr><td>Resumable training</td><td>Done</td><td>The first large-parser run was killed when the computer ran low on memory and lost all progress</td><td>Checkpoints every 15 minutes, mid-epoch; a watchdog restarts a killed run from the last checkpoint</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><h3>Open design questions</h3><ul class="tight">
+    <li>Affixes like anti- and non-: their own tokens in the language, or separate dictionary concepts?</li>
+    <li>Shared modifiers ("cell and car numbers"): how the language should write a modifier that applies to two nouns.</li>
+    <li>Nested scopes of the same verb: which closing tag closes which opening one.</li>
+  </ul></div>
+</section>
+
 <section id="v030" class="version">
-  <div class="vhead"><h2>v0.3.0 · transformer parser</h2><span class="tag">library 0.3.0</span><span class="tag">dictionary 0.5.0</span><span class="tag">tokenizer scheme 2</span></div>
+  <div class="vhead"><h2>v0.3.0 · transformer parser</h2><span class="tag">library 0.3.0</span><span class="tag">dictionary 0.6.0</span><span class="tag">tokenizer scheme 2</span></div>
   <p>The parser reads each sentence with a small pretrained transformer instead of a BiLSTM, an exact projective decoder builds the tree, and two new rule passes simplify the meaning graph and flag anything the encoder is unsure of. Everything still runs on numpy, in the browser too.</p>
   <div class="chart"><pre class="mermaid">
 flowchart TD
@@ -121,7 +158,7 @@ flowchart TD
   H --> S[Simplify<br>split and-clauses and comma asides]
   S --> I[Sense choice<br>same transformer: word in context vs each sense's gloss]
   I --> J[Serializer<br>graph -> UGL tokens]
-  K[(Dictionary 0.5.0<br>headword per sense)] --> I
+  K[(Dictionary 0.6.0<br>headword per sense)] --> I
   K --> J
   D2 -. head probabilities .-> Q[Quality flags<br>uncertain parse, unknown word,<br>unresolved pronoun, dropped word]
   G -.-> Q
@@ -173,13 +210,11 @@ flowchart TD
     </tbody>
   </table></div>
   <div class="grid2">
-    <div class="note"><h3>Not shipped yet</h3><ul class="tight">
-      <li>Sense choice from the parser's own layers: the fine-tuned layers lost word-meaning information (≤ 66.8%, no better than most-frequent-sense).</li>
-      <li>In training: a sense head trained jointly with the parser that compares the word in context with each candidate sense's dictionary gloss.</li>
+    <div class="note"><h3>Tried and not shipped</h3><ul class="tight">
+      <li>Sense choice from the parser's own layers: the fine-tuned layers lost word-meaning information (≤ 66.8%, no better than most-frequent-sense). Replaced by the gloss-comparing sense head above.</li>
     </ul></div>
     <div class="note"><h3>Known gaps</h3><ul class="tight">
       <li>Mass nouns get "a" when decoding ("a food").</li>
-      <li>Some headwords are abbreviations ("km").</li>
       <li>Uncertain parses are the biggest reason sentences are flagged (38% of a Wikipedia sample).</li>
     </ul></div>
   </div>
