@@ -49,11 +49,12 @@ def read_gallery():
 
 
 def build_bundle(path):
-    """The ugl package (all .py files, the parser weights) + the default
-    dictionary, as a zip whose top-level folder is `ugl/`."""
+    """The ugl package (all .py files, the parser weights, the sense
+    centroids) + the default dictionary, as a zip whose top-level folder is `ugl/`."""
     pkg = os.path.join(ROOT, "ugl")
     dict_file = default_path()
     from ugl.parser.model import DEFAULT_PATH as PARSER
+    from ugl.wsd_context import DEFAULT_PATH as SENSES
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for dirpath, dirs, files in os.walk(pkg):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", "models")]
@@ -61,8 +62,10 @@ def build_bundle(path):
                 if name.endswith(".py"):
                     full = os.path.join(dirpath, name)
                     z.write(full, "ugl/" + os.path.relpath(full, pkg).replace(os.sep, "/"))
-        z.write(PARSER, "ugl/" + os.path.relpath(PARSER, pkg).replace(os.sep, "/"),
-                compress_type=zipfile.ZIP_STORED)
+        for f in (PARSER, SENSES):                     # .npz: already compressed
+            if os.path.exists(f):
+                z.write(f, "ugl/" + os.path.relpath(f, pkg).replace(os.sep, "/"),
+                        compress_type=zipfile.ZIP_STORED)
         z.write(os.path.join(DICT_DIR, "default.txt"), "ugl/dictionary/default.txt")
         # already gzipped: store it rather than compressing twice
         z.write(dict_file, f"ugl/dictionary/{os.path.basename(dict_file)}",
@@ -164,7 +167,7 @@ def version_assets(out, manifest, pv):
 
 
 def encode_gallery(sentences):
-    u = ugl.UGL(wsd=False)      # most-frequent-sense: the browser has no BERT sense model
+    u = ugl.UGL()               # same parser + numpy sense model the browser runs
     items = []
     for en in sentences:
         items.append({"en": en, "ugl": u.encode(en)})

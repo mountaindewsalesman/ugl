@@ -26,7 +26,7 @@ U = None
 
 def init():
     global U
-    U = ugl.UGL(wsd=False)
+    U = ugl.UGL()           # parser + sense model share one numpy transformer pass
     return json.dumps({
         "ugl_version": ugl.__version__,
         "dictionary_version": U.version,

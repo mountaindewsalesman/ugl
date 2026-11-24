@@ -1,9 +1,13 @@
 """Neural tagger + dependency parser, inference in pure numpy.
 
-Architecture (trained by tools/train_parser.py, PyTorch):
+Two encoders share the heads below (meta["encoder"] in the .npz says which):
+  "transformer" (v0.3, tools/train_parser_tf.py): a fine-tuned ELECTRA-small
+                  (ugl/transformer.py); a word = learned mix of all layers at
+                  its first word piece
+  "bilstm"      (v0.2, tools/train_parser.py):
     token features  = word emb (trained) + pretrained vector (frozen, PCA 128)
-                      + prefix/suffix embs + shape emb
-    encoder         = 2-layer BiLSTM
+                      + prefix/suffix embs + shape emb + character CNN
+    encoder         = 3-layer BiLSTM
     taggers         = linear heads for UPOS, XPOS (Penn tag), FEATS
     arcs            = biaffine scorer over MLP(dep) x MLP(head), decoded to a
                       tree with Chu-Liu/Edmonds (one root)
@@ -16,9 +20,14 @@ import os
 import numpy as np
 
 from .features import AFFIX_KEYS, affixes, chars, norm, shape
-from .mst import chu_liu_edmonds
+from .mst import chu_liu_edmonds, eisner
 
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "parser-en.npz")
+DECODERS = {"eisner": eisner, "cle": chu_liu_edmonds}
+
+WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
+# the shipped parser; the v0.2 BiLSTM weights (parser-en.npz) remain in git history
+# and still load here: the .npz meta says which encoder it uses
+DEFAULT_PATH = os.path.join(WEIGHTS, "parser-en-tf.npz")
 
 
 def _sig(x):
@@ -30,15 +39,27 @@ def _relu(x):
 
 
 class ParserModel:
-    def __init__(self, path=DEFAULT_PATH, data=None):
+    def __init__(self, path=DEFAULT_PATH, data=None, decoder="eisner"):
+        """decoder: "eisner" = best projective tree (default; English trees are
+        projective), "cle" = Chu-Liu/Edmonds, best tree with crossing arcs allowed."""
         self.path = path
+        self.decode_tree = DECODERS[decoder]
         z = np.load(path if data is None else data, allow_pickle=False)
         self.w = {k: z[k].astype(np.float32) for k in z.files if k != "meta"}
         meta = json.loads(str(z["meta"]))
         self.meta = meta
         self.vocab = {k: {s: i for i, s in enumerate(v)} for k, v in meta["vocabs"].items()}
         self.labels = {k: meta["vocabs"][k] for k in ("upos", "xpos", "feats", "deprel")}
-        self.layers = meta["lstm_layers"]
+        self.kind = meta.get("encoder", "bilstm")
+        self.cache = {}                   # words -> per-layer word vectors, last few sentences
+        if self.kind == "transformer":
+            from ..transformer import Transformer, WordPiece
+            t = meta["transformer"]
+            self.wp = WordPiece(meta["wordpiece"], meta.get("lowercase", True))
+            self.tf = Transformer({k[3:]: v for k, v in self.w.items() if k.startswith("tf.")},
+                                  t["layers"], t["heads"], t["eps"])
+        else:
+            self.layers = meta["lstm_layers"]
 
     # -------------------------------------------------------------- features
     def _ids(self, vocab, keys):
@@ -93,10 +114,45 @@ class ParserModel:
         return out
 
     def encode(self, words):
+        if self.kind == "transformer":
+            return np.tensordot(self.w["mix"], self.layer_states(words), axes=1)
         x = self.embed(words)
         for l in range(self.layers):
             x = np.concatenate([self.lstm_dir(x, l, False), self.lstm_dir(x, l, True)], axis=1)
         return x
+
+    def layer_states(self, words):
+        """Transformer: (layers+1, n_words, d) states at each word's first piece.
+        Cached for the last sentence, so the sense model can reuse the pass."""
+        key = tuple(words)
+        if key in self.cache:
+            return self.cache[key]
+        limit = self.tf.max_len() - 2
+        chunks, cur, size = [], [], 0          # a sentence longer than the model's window is read in parts
+        for w in words:
+            n = len(self.wp.encode_words([w])[0]) - 2
+            if cur and size + n > limit:
+                chunks.append(cur)
+                cur, size = [], 0
+            cur.append(w)
+            size += n
+        chunks.append(cur)
+        parts = []
+        for c in chunks:
+            ids, first = self.wp.encode_words(c)
+            hs = self.tf.hidden_states(ids[: limit + 2])
+            parts.append(np.stack([h[first] for h in hs]))
+        out = np.concatenate(parts, axis=1)
+        if len(self.cache) >= 16:
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[key] = out
+        return out
+
+    def arc_scores(self, Hs):
+        """S[i, j] = score of word j heading word i (index 0 = ROOT)."""
+        H = np.concatenate([self.w["root"][None, :], Hs])
+        dep, head = self.mlp("arc_dep", H), self.mlp("arc_head", H)
+        return dep @ self.w["arc_W"] @ head.T + (head @ self.w["arc_u"])[None, :]
 
     def mlp(self, name, x):
         return _relu(x @ self.w[f"{name}.weight"].T + self.w[f"{name}.bias"])
@@ -116,9 +172,7 @@ class ParserModel:
         xpos = self.lin("xpos", Hs).argmax(1)
         feats = self.lin("feats", Hs).argmax(1)
 
-        dep, head = self.mlp("arc_dep", H), self.mlp("arc_head", H)
-        S = dep @ self.w["arc_W"] @ head.T + (head @ self.w["arc_u"])[None, :]   # S[i, j]: head j of dep i
-        heads = chu_liu_edmonds(S)
+        heads = self.decode_tree(self.arc_scores(Hs))
 
         ld, lh = self.mlp("lab_dep", H), self.mlp("lab_head", H)
         W = self.w["lab_W"]                                   # (L, a, a)

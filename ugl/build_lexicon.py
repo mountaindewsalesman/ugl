@@ -136,7 +136,10 @@ def name_senses(counts, freq, min_count, max_names):
     return index, extra
 
 
-def sense_frequencies(counts):
+def sense_frequencies(counts, share=None):
+    """-> freq[sense].  If share (a dict) is given it is filled with
+    share[(sense, lemma)] = how many of the sense's uses were spelled lemma,
+    which picks each concept's headword ("car", not "machine", for car.n.01)."""
     freq = collections.defaultdict(float)
     for (lemma, c), n in counts.items():
         if c == "name":
@@ -160,6 +163,8 @@ def sense_frequencies(counts):
         tot = sum(weights)
         for s, w in zip(senses, weights):
             freq[s.name()] += n * w / tot
+            if share is not None:
+                share[(s.name(), lemma)] = share.get((s.name(), lemma), 0.0) + n * w / tot
     # every WordNet sense gets a tiny SemCor-based floor so unseen words still
     # get stable (late) positions
     for s in wn.all_synsets():
@@ -391,7 +396,8 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
     log(f"  {len(counts)} distinct (lemma, class) pairs, {sum(counts.values())} tokens")
 
     log("step 2: sense frequencies")
-    freq = sense_frequencies(counts)
+    share = {}
+    freq = sense_frequencies(counts, share)
     name_index, name_extra = name_senses(counts, freq, min_name, max_names)
     log(f"  {len(name_index)} frequent names: {len(name_index) - len(name_extra)} already in WordNet, "
         f"{len(name_extra)} new")
@@ -427,8 +433,9 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
                             "gloss": s.definition(), "proper": True}
                 continue
             ccls = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}[s.pos()]
-            best = max(s.lemmas(), key=lambda l: (counts.get((l.name().lower().replace("_", " "), ccls), 0)
-                                                  + counts.get((l.name().lower(), ccls), 0)
+            # headword: the spelling most used *in this sense* (a lemma's corpus
+            # count spread over its senses), so car.n.01 reads "car", not "machine"
+            best = max(s.lemmas(), key=lambda l: (share.get((s.name(), l.name().lower().replace("_", " ")), 0.0)
                                                   + counts.get((l.name().replace("_", " "), "name"), 0),
                                                   l.count(), -s.lemmas().index(l)))
             ids[tok] = {"sense": s.name(), "lemma": best.name().replace("_", " "),

@@ -20,8 +20,9 @@ def main():
     ap.add_argument("--model", default=DEFAULT_PATH)
     ap.add_argument("--split", default="test")
     ap.add_argument("--n", type=int, default=None)
+    ap.add_argument("--decoder", default="eisner", choices=["eisner", "cle"])
     a = ap.parse_args()
-    m = ParserModel(a.model)
+    m = ParserModel(a.model, decoder=a.decoder)
     sents = list(read_conllu(os.path.join(ROOT, "data", "ud", f"en_ewt-ud-{a.split}.conllu")))[: a.n]
     tot = up = xp = ua = la = 0
     t0 = time.time()

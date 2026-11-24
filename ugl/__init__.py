@@ -8,7 +8,7 @@
 
     u = ugl.load("ugl-dict-0.1.0.json.gz")     # pin an exact dictionary version
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .lexicon import Lexicon, available
 from .decoder import Decoder
@@ -46,7 +46,8 @@ class UGL:
                 from .encoder import Encoder
                 self._encoder = Encoder(self.lexicon, simplify=self.simplify)
             if self._want_wsd:
-                self.wsd = _attach_context_wsd(self.lexicon, self._want_wsd)
+                self.wsd = _attach_context_wsd(self.lexicon, self._want_wsd,
+                                               getattr(self._encoder, "parser", None))
         return self._encoder
 
     @property
@@ -78,9 +79,11 @@ class UGL:
 _default = None
 
 
-def _attach_context_wsd(lexicon, want):
-    """Use the contextual sense model if its centroid file and torch are
-    available; otherwise keep most-frequent-sense (always works)."""
+def _attach_context_wsd(lexicon, want, parser=None):
+    """wsd=True: the sense centroids built on the parser's own transformer
+    (numpy; identical on desktop and in the browser).  wsd="path.npz": another
+    centroid file, e.g. BERT-base ones (needs torch).  If the file or its
+    model is missing, most-frequent-sense is kept (always works)."""
     import os
     from .wsd_context import DEFAULT_PATH
     path = want if isinstance(want, str) else DEFAULT_PATH
@@ -88,12 +91,9 @@ def _attach_context_wsd(lexicon, want):
         return None
     try:
         from .wsd_context import attach
-        return attach(lexicon, path, prior_weight=CONTEXT_PRIOR_WEIGHT)
+        return attach(lexicon, path, parser=parser)
     except ImportError:
         return None
-
-
-CONTEXT_PRIOR_WEIGHT = 0.05   # best on held-out SemCor: 73.5% vs 66.8% most-frequent-sense
 
 
 def load(dictionary=None, wsd=True, engine="ugl"):

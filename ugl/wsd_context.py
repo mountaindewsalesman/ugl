@@ -13,13 +13,14 @@ import os
 
 import numpy as np
 
-DEFAULT_MODEL = "bert-base-uncased"
-# looked up in this order: $UGL_WSD, ugl/models/ inside the package
-DEFAULT_PATH = os.environ.get("UGL_WSD") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "bert-semcor.npz")
+DEFAULT_MODEL = "ugl-parser:6-9"
+# looked up in this order: $UGL_WSD, the centroids shipped with the parser
+DEFAULT_PATH = os.environ.get("UGL_WSD") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "parser", "weights", "senses-en.npz")
 
 
 class ContextEmbedder:
-    def __init__(self, model_name=DEFAULT_MODEL, layers=4):
+    def __init__(self, model_name="bert-base-uncased", layers=4):
         import torch
         from transformers import AutoModel, AutoTokenizer
         self.torch = torch
@@ -51,8 +52,40 @@ class ContextEmbedder:
         return res
 
 
+class SharedEmbedder:
+    """Word vectors from the parser's own transformer (ugl/transformer.py):
+    numpy only, so it runs in the browser, and the parser has already done the
+    pass for the sentence being encoded.  layers: which transformer layers to
+    sum (the centroid file's model name says, e.g. "ugl-parser:6-9")."""
+
+    def __init__(self, parser, layers):
+        self.parser = parser
+        self.layers = list(layers)
+
+    def embed_batch(self, sents):
+        out = []
+        for words in sents:
+            v = self.parser.layer_states(list(words))[self.layers].sum(0)
+            v = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-8)
+            out.append(v.astype(np.float32))
+        return out
+
+
+def make_embedder(model_name, parser=None):
+    """'ugl-parser:A-B' -> SharedEmbedder over layers A..B of the parser's
+    transformer; anything else is a Hugging Face model name (needs torch)."""
+    if model_name.startswith("ugl-parser"):
+        if parser is None:
+            from .parser.model import ParserModel, DEFAULT_PATH
+            parser = ParserModel(DEFAULT_PATH)
+        a, b = model_name.split(":")[1].split("-")
+        return SharedEmbedder(parser, range(int(a), int(b) + 1))
+    return ContextEmbedder(model_name)
+
+
 class ContextWSD:
-    def __init__(self, lexicon, path=DEFAULT_PATH, prior_weight=0.05, embedder=None):
+    def __init__(self, lexicon, path=DEFAULT_PATH, prior_weight=None, embedder=None, parser=None):
+        """prior_weight: None = the value tuned on held-out SemCor, stored in the file."""
         data = np.load(path, allow_pickle=False)
         self.lex = lexicon
         self.names = [str(x) for x in data["senses"]]
@@ -60,8 +93,9 @@ class ContextWSD:
         self.mat = data["vectors"].astype(np.float32)
         self.mat /= np.linalg.norm(self.mat, axis=1, keepdims=True) + 1e-8
         self.model_name = str(data["model"])
-        self.emb = embedder or ContextEmbedder(self.model_name)
-        self.prior_weight = prior_weight
+        self.emb = embedder or make_embedder(self.model_name, parser)
+        self.prior_weight = prior_weight if prior_weight is not None else (
+            float(data["prior_weight"]) if "prior_weight" in data.files else 0.05)
         self._cache_key, self._cache_val = None, None
         self._gloss = {}
 

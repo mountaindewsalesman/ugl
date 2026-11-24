@@ -63,7 +63,7 @@ def test_simplify_splits_asides_and_and():
     out = ENC.encode("The man who left saw me.")
     assert len(out) == 1 and "v3" in out[0], out              # restrictive clause stays
     out = ENC.encode("I ate and she slept.")
-    assert len(out) == 2 and "v4" not in " ".join(out), out
+    assert len(out) == 2 and "v4" not in " ".join(out).split(), out
     out = ENC.encode("I ate but she slept.")
     assert len(out) == 1 and out[0].startswith("v6"), out     # "but" is a relation: kept
 

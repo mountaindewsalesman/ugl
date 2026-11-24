@@ -94,3 +94,61 @@ def chu_liu_edmonds(scores):
         if total > best:
             best, best_heads = total, h
     return best_heads
+
+
+def eisner(scores):
+    """Best PROJECTIVE tree (no crossing arcs) with a single root: Eisner's
+    O(n^3) dynamic program.  Same input/output as chu_liu_edmonds.
+    English trees are projective (>99% of arcs in UD English), so ruling
+    crossing arcs out is a structural constraint, not a heuristic."""
+    n = scores.shape[0] - 1                      # words 1..n; work on 0..n-1
+    if n == 1:
+        return np.array([-1, 0])
+    arc = scores[1:, 1:].T.astype(np.float64)    # arc[h, d]
+    root = scores[1:, 0].astype(np.float64)
+    NEG = -1e18
+    # C/I[s, t, 0]: head t (arcs point left), [s, t, 1]: head s
+    C = np.full((n, n, 2), NEG)
+    I = np.full((n, n, 2), NEG)
+    Cb = np.zeros((n, n, 2), int)
+    Ib = np.zeros((n, n, 2), int)
+    for s in range(n):
+        C[s, s, 0] = C[s, s, 1] = 0.0
+    for k in range(1, n):
+        for s in range(n - k):
+            t = s + k
+            tmp = C[s, s:t, 1] + C[s + 1:t + 1, t, 0]          # split r = s..t-1
+            r = int(tmp.argmax())
+            I[s, t, 0] = tmp[r] + arc[t, s]
+            I[s, t, 1] = tmp[r] + arc[s, t]
+            Ib[s, t, 0] = Ib[s, t, 1] = s + r
+            tl = C[s, s:t, 0] + I[s:t, t, 0]                   # head t: r = s..t-1
+            r = int(tl.argmax())
+            C[s, t, 0], Cb[s, t, 0] = tl[r], s + r
+            tr = I[s, s + 1:t + 1, 1] + C[s + 1:t + 1, t, 1]   # head s: r = s+1..t
+            r = int(tr.argmax())
+            C[s, t, 1], Cb[s, t, 1] = tr[r], s + 1 + r
+    whole = C[0, :, 0] + C[:, n - 1, 1] + root               # the one word ROOT heads
+    top = int(whole.argmax())
+    heads = np.full(n + 1, -1)
+    heads[top + 1] = 0
+
+    stack = [(0, top, "C", 0), (top, n - 1, "C", 1)]
+    while stack:
+        s, t, kind, d = stack.pop()
+        if s == t:
+            continue
+        if kind == "I":
+            r = Ib[s, t, d]
+            if d == 0:
+                heads[s + 1] = t + 1
+            else:
+                heads[t + 1] = s + 1
+            stack += [(s, r, "C", 1), (r + 1, t, "C", 0)]
+        else:
+            r = Cb[s, t, d]
+            if d == 0:
+                stack += [(s, r, "C", 0), (r, t, "I", 0)]
+            else:
+                stack += [(s, r, "I", 1), (r, t, "C", 1)]
+    return heads
