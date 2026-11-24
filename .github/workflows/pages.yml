@@ -28,7 +28,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install ugl (with spaCy + en_core_web_md)
+      - name: Install ugl
         run: pip install .
 
       - name: Build site (encodes the gallery with the real encoder)
@@ -47,6 +47,12 @@ jobs:
           sleep 2
           node tools/playground_smoke.mjs http://localhost:8000/ "$RUNNER_TEMP/smoke.json" _site
           python tools/build_playground.py --out _site --compare "$RUNNER_TEMP/smoke.json"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-v1
 
       - name: Test the page in real browsers (Chromium + Firefox)
         run: |

@@ -372,11 +372,12 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
     import spacy
     nlp = spacy.load("en_core_web_md")
     os.makedirs(DATA, exist_ok=True)
-    counts_path = os.path.join(DATA, "counts.json")
+    import gzip
+    counts_path = os.path.join(DATA, "counts.json.gz")
 
     if os.path.exists(counts_path) and not recount:
         log("loading cached counts", counts_path)
-        with open(counts_path, encoding="utf-8") as f:
+        with gzip.open(counts_path, "rt", encoding="utf-8") as f:
             counts = collections.Counter({tuple(k.split("\t")): v for k, v in json.load(f).items()})
     else:
         files = sorted(glob.glob(os.path.join(raw_dir, "**", "*.txt"), recursive=True))
@@ -385,7 +386,7 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
             sys.exit(1)
         log(f"step 1: counting {len(files)} files")
         counts = count_corpus(nlp, files, limit_chars)
-        with open(counts_path, "w", encoding="utf-8") as f:
+        with gzip.open(counts_path, "wt", encoding="utf-8") as f:
             json.dump({f"{l}\t{c}": n for (l, c), n in counts.items()}, f)
     log(f"  {len(counts)} distinct (lemma, class) pairs, {sum(counts.values())} tokens")
 
@@ -548,7 +549,7 @@ def main(argv=None):
     ap.add_argument("--raw", default=os.path.join(DATA, "raw"))
     ap.add_argument("--out", default=os.path.join(BUILD, "ugl-dict.json.gz"))
     ap.add_argument("--limit-chars", type=int, default=None, help="stop counting after N characters")
-    ap.add_argument("--recount", action="store_true", help="ignore cached data/counts.json")
+    ap.add_argument("--recount", action="store_true", help="ignore cached data/counts.json.gz")
     ap.add_argument("--min-name", type=int, default=20, help="corpus count for a name to get its own number")
     ap.add_argument("--max-names", type=int, default=30000)
     a = ap.parse_args(argv)

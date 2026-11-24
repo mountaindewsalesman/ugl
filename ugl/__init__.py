@@ -8,7 +8,7 @@
 
     u = ugl.load("ugl-dict-0.1.0.json.gz")     # pin an exact dictionary version
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .lexicon import Lexicon, available
 from .decoder import Decoder
