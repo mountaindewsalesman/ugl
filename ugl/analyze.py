@@ -186,10 +186,13 @@ class Analyzer:
             ev.pred, ev.lemma = "have", "have"
         elif v.lemma == "be":
             ev.pred = "be" if v.dep("obj", "attr") else "exist"
-        else:
+        loose_prt = None
+        if not nominal and ev.pred == "verb":
             prt = v.dep1("compound:prt")
             if prt is not None and self.lex.senses(v.lemma + " " + prt.lower, "v"):
-                ev.lemma = v.lemma + " " + prt.lower
+                ev.lemma = v.lemma + " " + prt.lower           # a real phrasal verb: "look up"
+            elif prt is not None:
+                loose_prt = prt                                # meaning kept below: "sat on X", "came back"
 
         # ---- tense / aspect / mood / negation
         ev.mods += self.verb_mods(v, cop, passive)
@@ -221,6 +224,13 @@ class Analyzer:
             o = v.dep1("obj")
             if o is not None:
                 ev.obj = self.entity(o)
+        if loose_prt is not None:
+            rel = PREP.get(loose_prt.lower)
+            if rel and ev.obj is not None:                     # "sat on the bank": a relation over the object
+                ev.rels.append(Rel(rel, ev.obj))
+                ev.obj = None
+            else:                                              # "came back", "gave up": an adverb
+                ev.manner.append(Attr(loose_prt.lower, "adj", "", loose_prt.i, adverb=True))
         io = v.dep1("iobj")
         if io is not None:
             ev.rels.append(Rel("to", self.entity(io)))
