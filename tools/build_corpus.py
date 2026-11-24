@@ -27,7 +27,7 @@ from ugl.corpus import documents, paragraphs  # noqa: E402
 
 KIND = [("uncertain grammar", "uncertain parse"), ("refers to nothing", "unresolved pronoun"),
         ("not in the dictionary", "unknown word"), ("no clear grammatical role", "unattached word"),
-        ("was dropped", "dropped content word"), ("round trip", "round trip unstable"),
+        ("was dropped", "dropped content word"), ("parsers disagree", "parsers disagree"), ("round trip", "round trip unstable"),
         ("not in the relation table", "unknown preposition"), ("does not parse back", "undecodable"),
         ("failed", "crash")]
 
@@ -45,6 +45,8 @@ def main():
                     help="calibrated head probability every word needs (see tools/calibrate_parser.py)")
     ap.add_argument("--parser", default=None,
                     help="parser weights to use instead of the shipped one (e.g. the larger corpus parser)")
+    ap.add_argument("--second-parser", default=None,
+                    help="another parser's weights: sentences where the two give different UGL are rejected")
     ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
     ap.add_argument("--allow", nargs="*", default=[], help="issue kinds to tolerate, e.g. 'unknown word'")
     a = ap.parse_args()
@@ -53,6 +55,9 @@ def main():
     if a.parser:
         from ugl.parser.model import ParserModel
         u.encoder.parser = ParserModel(a.parser)
+    if a.second_parser:
+        from ugl.parser.model import ParserModel
+        u.encoder.second_parser = ParserModel(a.second_parser)
     os.makedirs(a.out, exist_ok=True)
     fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8")
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")

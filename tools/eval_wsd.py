@@ -53,11 +53,20 @@ def main():
     ap.add_argument("--sents", type=int, default=400)
     ap.add_argument("--offset", type=int, default=20000)
     ap.add_argument("--context", default=None, help="path to bert-semcor.npz: evaluate the contextual model")
+    ap.add_argument("--gloss", default=None, help="path to a parser .npz with a sense head (ugl.wsd_gloss)")
     a = ap.parse_args()
     nltk.download("semcor", quiet=True)
     nlp = spacy.load("en_core_web_md")
     lex = Lexicon()
-    if a.context:
+    if a.gloss:
+        from ugl.parser.model import ParserModel
+        from ugl.wsd_gloss import GlossWSD
+        parser = ParserModel(a.gloss)
+        weights = [0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 99.0]   # prior weight in logit units; 99 = most frequent
+        models = {w: GlossWSD(lex, parser, prior_weight=w) for w in weights}
+        for m in models.values():
+            m._gloss = models[0.0]._gloss              # share the gloss-vector cache
+    elif a.context:
         from ugl.wsd_context import ContextWSD
         base = ContextWSD(lex, a.context)
         weights = [0.0, 0.02, 0.05, 0.1, 0.2, 99.0]   # 99 = pure most-frequent-sense
@@ -82,7 +91,7 @@ def main():
                 hits[w][0] += pick == gold
                 hits[w][1] += lex.senses_[pick]["tokens"] == gold_t
     print(f"{n} ambiguous words from {a.sents} SemCor sentences")
-    print("weight  sense-acc  token-acc   (" + ("prior weight; 99 = most frequent sense" if a.context else "weight 0 = most frequent sense") + ")")
+    print("weight  sense-acc  token-acc   (" + ("prior weight; 99 = most frequent sense" if (a.context or a.gloss) else "weight 0 = most frequent sense") + ")")
     for w in weights:
         print(f"{w:6}  {hits[w][0]/n:9.3f}  {hits[w][1]/n:9.3f}")
 

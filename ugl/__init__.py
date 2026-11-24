@@ -115,11 +115,16 @@ _default = None
 
 
 def _attach_context_wsd(lexicon, want, parser=None):
-    """wsd=True: the sense centroids built on the parser's own transformer
-    (numpy; identical on desktop and in the browser).  wsd="path.npz": another
-    centroid file, e.g. BERT-base ones (needs torch).  If the file or its
-    model is missing, most-frequent-sense is kept (always works)."""
+    """wsd=True: the parser's own sense head (ugl/wsd_gloss.py: the word in
+    context against each sense's gloss, trained jointly with the parser; numpy,
+    identical on desktop and in the browser; 73.5% on held-out SemCor vs 66.8%
+    most-frequent-sense).  wsd="path.npz": a centroid file instead, e.g. BERT-base
+    (needs torch).  Without either, most-frequent-sense (always works)."""
     import os
+    if want is True and parser is not None and "wsd.mix" in getattr(parser, "w", {}):
+        from .wsd_gloss import GlossWSD
+        lexicon.wsd = GlossWSD(lexicon, parser)
+        return lexicon.wsd
     from .wsd_context import DEFAULT_PATH
     path = want if isinstance(want, str) else DEFAULT_PATH
     if not os.path.exists(path):

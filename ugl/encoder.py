@@ -97,6 +97,7 @@ class Encoder:
         self.strip_parens = strip_parens
         self.simplify = simplify
         self.unsure = unsure
+        self.second_parser = None        # optional: a second parser for ensemble disagreement checks
 
     @property
     def unknown(self):
@@ -139,6 +140,16 @@ class Encoder:
             if self.meaning(alt, words, question) != base:
                 out.append(f"uncertain grammar at '{t['form']}' ({t['conf']:.0%} sure of its head; "
                            f"the other reading means something else)")
+        if self.second_parser is not None:
+            # ensemble check: an independently trained parser reads the sentence;
+            # if its tree gives different UGL, the reading is in doubt
+            other = self.second_parser.parse(words)
+            base = base if base is not None else self.meaning(tree, words, question)
+            if self.meaning(other, words, question) != base:
+                diff = [t["form"] for t, o in zip(tree, other)
+                        if (t["head"], t["deprel"]) != (o["head"], o["deprel"]) and t["upos"] != "PUNCT"]
+                out.append("the two parsers disagree in a way that changes the UGL (at "
+                           + ", ".join(f"'{w}'" for w in diff[:4]) + ")")
         return out
 
     def encode(self, text, keep_memory=False, with_sources=False):

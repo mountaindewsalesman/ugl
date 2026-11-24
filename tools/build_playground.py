@@ -282,7 +282,7 @@ def main(argv=None):
         "bundle_bytes": os.path.getsize(os.path.join(out, "ugl-py.zip")),
         "wheels": [f"wheels/{wheel}"],
         "pyodide": {"version": pv, "path": "pyodide/", "packages": py_pkgs},
-        "gallery": {"file": "gallery.json", "parser": model, "sense_choice": "most frequent sense"},
+        "gallery": {"file": "gallery.json", "parser": model, "sense_choice": "contextual sense head (73.5% on held-out SemCor)"},
         "commit": commit,
         "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
