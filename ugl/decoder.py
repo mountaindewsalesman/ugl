@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .core import (parse_literal, WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
+from .core import (number_text, parse_literal, WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
                    CLAUSE_FORM_VERBS, V, tokenize)
 
 try:
@@ -110,6 +110,7 @@ class Parser:
     def __init__(self, tokens):
         self.t = tokens
         self.n = len(tokens)
+        self.opener = {}        # closing-tag index -> index of the word it closes (see humanize.tree)
 
     def peek(self, i):
         return self.t[i] if i < self.n else None
@@ -131,9 +132,10 @@ class Parser:
     def is_verb(self, x):
         return x is not None and ((x.kind == "word" and x.cls == "v") or (x.kind == "unk" and x.cls == "v"))
 
-    def expect_close(self, i, vid):
+    def expect_close(self, i, vid, opener):
         if self.peek(i) != f"\\v{vid}":
             raise ParseError(f"expected \\v{vid} at {i}, got {self.peek(i)}")
+        self.opener[i] = opener
         return i + 1
 
     def clause(self, i):
@@ -150,19 +152,22 @@ class Parser:
             except ParseError:
                 np, i = None, save
         if np is None and x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS:
+            o = i
             a, i = self.clause(i + 1)
-            i = self.expect_close(i, x.idx)
+            i = self.expect_close(i, x.idx, o)
             b, i = self.clause(i)
-            i = self.expect_close(i, x.idx)
+            i = self.expect_close(i, x.idx, o)
             return Logic(x, a, b), i
         if np is None:
             np, i = self.np(i)
         v = self.tokat(i)
         if self.is_verb(v):
             if v.kind == "word" and v.idx in WRAPPER_VERBS:
+                o = i
                 body, i = self.clause(i + 1)
-                i = self.expect_close(i, v.idx)
+                i = self.expect_close(i, v.idx, o)
                 return Wrap(np, v, body), i
+            vpos = i
             i += 1
             advs = []
             while True:
@@ -180,6 +185,7 @@ class Parser:
                     c, j = self.clause(i)
                     if not isinstance(c, Bare) and self.peek(j) == f"\\v{vid}":
                         comps.append(c)
+                        self.opener[j] = vpos
                         i = j + 1
                     else:
                         raise ParseError("not a complement")
@@ -188,11 +194,12 @@ class Parser:
                     if self.starts_np(i):
                         obj, i = self.np(i)
                         if self.peek(i) == f"\\v{vid}":   # the NP was a bare complement
+                            self.opener[i] = vpos
                             comps.append(Bare(obj))
                             obj, i = None, i + 1
             while self.starts_np(i) or self.clause_form_start(i):
                 c, i = self.clause(i)
-                i = self.expect_close(i, vid)
+                i = self.expect_close(i, vid, vpos)
                 comps.append(c)
             return Core(np, v, advs, obj, comps), i
         return Bare(np), i
@@ -202,11 +209,11 @@ class Parser:
         return x is not None and x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS
 
     def coord_np(self, i):
-        x = self.tokat(i)
+        x, o = self.tokat(i), i
         a, i = self.np(i + 1)
-        i = self.expect_close(i, x.idx)
+        i = self.expect_close(i, x.idx, o)
         b, i = self.np(i)
-        i = self.expect_close(i, x.idx)
+        i = self.expect_close(i, x.idx, o)
         return NP(x, members=[a, b]), i
 
     def np(self, i):
@@ -226,8 +233,9 @@ class Parser:
             elif "j" in x.mods and x.cls in ("n", "nv") or (x.kind == "name" and "j" in x.mods):
                 np.comps.append(NP(x)); i += 1
             elif x.kind == "word" and x.cls == "v" and x.idx == V["that"]:
+                o = i
                 c, i = self.clause(i + 1)
-                i = self.expect_close(i, V["that"])
+                i = self.expect_close(i, V["that"], o)
                 np.rels.append(c)
             elif "y" in x.mods and x.cls in ("n", "nv"):
                 np.poss, i = self.np(i)
@@ -340,7 +348,7 @@ class Decoder:
         if t.kind == "name":
             return t.raw.rsplit("'", 1)[0][1:].replace("_", " ")
         if t.kind == "num":
-            return t.raw[1:].replace("_", " ")
+            return number_text(t.raw)
         if t.kind == "unk":
             return parse_literal(t.raw)[2]
         cls = "v" if t.cls == "nv" else t.cls
@@ -387,8 +395,13 @@ class Decoder:
         h = np.head
         if np.members:                                   # "John and Mary"
             word = "or" if h.idx == V["or"] else "and"
+            quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
             parts = [self.np(m, ctx, case if case != "poss" else "obj") for m in np.members]
             s = f" {word} ".join(parts)
+            if quant in ("every", "all"):                # "all of (cats and dogs)" = both cats and dogs
+                s = ("both " if len(parts) == 2 and word == "and" else "all of ") + s
+            elif quant:
+                s = f"{quant} of {s}"
             return s + "'s" if case == "poss" else s
         if h.kind == "word" and h.cls == "n" and h.idx in RESERVED_NOUNS:
             key = pron_key(h.base, h.mods)
@@ -397,7 +410,12 @@ class Decoder:
                 return p[0] if case == "subj" else p[1] if case == "obj" else p[2]
             m = "".join(c for c in h.mods if c in "qxdets")
             word = SPECIAL.get((h.base, m)) or SPECIAL.get((h.base, m.replace("s", ""))) or RESERVED_NOUNS[h.idx]
-            words = [word] + [self.adj(a) for a in np.adjs]
+            rq = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
+            if rq:                                  # "many things", "all things"
+                word = ("all" if rq == "every" else rq) + " " + SPECIAL.get((h.base, "s"), word)
+            nums = [self.lemma(n) + (" of" if self.lemma(n).endswith("s") and not self.lemma(n)[0].isdigit() else "")
+                    for n in np.nums]
+            words = nums + [word] + [self.adj(a) for a in np.adjs]
             for r in np.rels:                       # "someone who can help"
                 sub = Ctx()
                 sub.gap = h.base
@@ -414,12 +432,14 @@ class Decoder:
         elif h.kind == "word" and plural:
             noun = inflect(noun, "NNS")
         pre = [self.adj(a) for a in np.adjs] + [self.lemma(c.head) for c in np.comps]
-        nums = [self.lemma(n) for n in np.nums]
+        # "tens of kilometers": a plural round number counts in units of itself
+        nums = [self.lemma(n) + (" of" if self.lemma(n).endswith("s") and not self.lemma(n)[0].isdigit() else "")
+                for n in np.nums]
         det = ""
         of_part = ""
         quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
         if quant:
-            if quant == "every" and (plural or np.poss is not None or "d" in h.mods or "e" in h.mods):
+            if quant == "every" and (plural or np.poss is not None or set(h.mods) & set("det")):
                 quant = "all"                               # all friends / all my friends / all these
             det = quant
             if np.poss is not None:                         # "all my friends", "most of John's books"
@@ -427,6 +447,8 @@ class Decoder:
             elif "d" in h.mods or "e" in h.mods:            # "most of these wars"
                 dem = ("these" if plural else "this") if "d" in h.mods else ("those" if plural else "that")
                 det += (" " if quant == "all" else " of ") + dem
+            elif "t" in h.mods:                             # "all the dogs", "most of the apples"
+                det += (" " if quant == "all" else " of ") + "the"
         elif np.poss is not None and self.namelike(np.poss):
             det = self.np(np.poss, ctx, "poss")
         elif np.poss is not None:
@@ -640,9 +662,25 @@ class Decoder:
             s = f"{self.np(c.obj, ctx)} {s}"
         return s
 
-    def complement(self, comp, main, ctx):
+    def infinitival(self, comp, main):
+        """Can this complement be said as "to ..."?  Its subject is the main
+        clause's subject or object and its verb carries no tense or mood; a
+        joined complement qualifies when every part does."""
+        if isinstance(comp, Logic) and comp.rel.idx in (V["and"], V["or"]):
+            return self.infinitival(comp.a, main) and self.infinitival(comp.b, main)
         if isinstance(comp, Core):
             same = comp.subj.head.base in (main.subj.head.base, main.obj.head.base if main.obj else None)
-            if same and not comp.verb.mods.replace("x", ""):
-                return self.core(comp, ctx, infinitive=True)
+            return same and not comp.verb.mods.replace("x", "")
+        return False
+
+    def infinitive(self, comp, ctx, to=True):
+        if isinstance(comp, Logic):
+            word = "or" if comp.rel.idx == V["or"] else "and"
+            return f"{self.infinitive(comp.a, ctx, to)} {word} {self.infinitive(comp.b, ctx, to=False)}"
+        s = self.core(comp, ctx, infinitive=True)
+        return s if to else s.replace("to ", "", 1) if s.startswith(("to ", "not to ")) else s
+
+    def complement(self, comp, main, ctx):
+        if self.infinitival(comp, main):
+            return self.infinitive(comp, ctx)
         return "that " + self.clause(comp, ctx)

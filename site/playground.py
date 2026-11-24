@@ -85,8 +85,10 @@ def explain_token(t):
 
 def encode(text):
     """English -> UGL lines, with UGL's own parser (the same code as `ugl encode`)."""
-    lines = U.encode(text)
-    return json.dumps({"ugl": lines, "unknown": sorted({w for w, _ in U.encoder.unknown})})
+    lines = U.encode_lines(text)
+    return json.dumps({"ugl": [l.ugl for l in lines], "sources": [l.source for l in lines],
+                       "issues": [list(l.issues) for l in lines],
+                       "unknown": sorted({w for w, _ in U.encoder.unknown})})
 
 
 def analyze(text):
@@ -107,6 +109,7 @@ def analyze(text):
             continue
         s["readable"] = U.humanize(line)
         s["gloss"] = gloss_line(U.lexicon, line)
+        s["tree"] = [dict(r, gloss=gloss_line(U.lexicon, r["ugl"])) for r in U.humanizer.tree(line)]
         try:
             s["back"] = U.decode(line)
         except Exception as e:  # the CLI prints these the same way

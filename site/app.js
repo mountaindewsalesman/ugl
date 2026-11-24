@@ -112,6 +112,7 @@ async function onEnglish() {
     if (mine !== encodeSeq) return;            // a newer edit is on its way
     note.textContent = data.unknown.length ? `Not in the dictionary (kept as literals): ${data.unknown.join(", ")}` : "";
     note.hidden = !data.unknown.length;
+    state.sources = data.ugl.map((l, i) => [l, data.sources[i], data.issues[i]]);
     setUGL(data.ugl.join("\n"));
   } catch (err) {
     if (mine === encodeSeq) { note.hidden = false; note.textContent = "Could not encode: " + (err.message || err); }
@@ -166,14 +167,34 @@ function renderResults(data) {
     if (s.error) {
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "ERROR"), el("span", { class: "error" }, s.error)));
     } else {
-      rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "READ"), el("span", { class: "readable" }, s.readable)));
-      rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "GLOSS"), el("span", { class: "mono gloss" }, s.gloss)));
+      rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "TREE"), renderTree(s.tree)));
       rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "BACK"),
         s.back_error ? el("span", { class: "error" }, "decode error: " + s.back_error) : el("span", { class: "back" }, s.back)));
+    }
+    const hit = sourceOf(s.ugl);
+    if (hit) {
+      rows.unshift(el("div", { class: "row" }, el("span", { class: "tag" }, "ENGLISH"), el("span", { class: "source" }, hit[1])));
+      rows.push(el("div", { class: "row" }, el("span", { class: "tag" }, "CHECK"), hit[2].length
+        ? el("ul", { class: "issues" }, hit[2].map((x) => el("li", {}, x)))
+        : el("span", { class: "ok" }, "no known problems")));
     }
     return el("article", { class: "card" }, data.sentences.length > 1 ? el("div", { class: "num" }, `Sentence ${i + 1}`) : null, rows, inspector);
   });
   $("results").replaceChildren(...cards);
+}
+
+// the English sentence a UGL line was encoded from (when it came from the English box)
+function sourceOf(line) {
+  const hit = (state.sources || []).find(([l]) => l.split(/\s+/).join(" ") === line);
+  return hit || null;
+}
+
+// readable view as an indented tree: a block per scope, closing tags on their own lines
+function renderTree(rows) {
+  return el("div", { class: "tree" }, rows.map((r) =>
+    el("div", { class: "tline" + (r.ugl.startsWith("\\") ? " tclose" : ""), style: `--d:${r.depth}` },
+      el("span", { class: "ttext" }, r.text),
+      el("span", { class: "tgloss mono" }, r.gloss))));
 }
 
 function explain(t, ids) {

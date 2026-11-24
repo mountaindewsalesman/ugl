@@ -31,9 +31,19 @@ def split(ev):
     return out
 
 
+def is_question(ev):
+    """A question stays whole: its joined clauses are part of what is asked."""
+    ents = [ev.subj, ev.obj] + [r.landmark for r in ev.rels if isinstance(r.landmark, Entity)]
+    def asks(e):        # "which X", or a reserved wh-noun (n7q = how, n5q = where ...)
+        return e is not None and (e.question or (e.kind == "reserved" and e.lemma[2:].count("q") > 0))
+    return "q" in ev.mods or any(asks(e) for e in ents)
+
+
 def split_and(ev):
     """Peel trailing top-level "and" clauses off (the serializer nests
     coordination left to right, so trailing "and"s are the outermost)."""
+    if is_question(ev):
+        return [ev]
     tail = []
     while ev.coord and ev.coord[-1][0] == "and":
         tail.append(ev.coord.pop()[1])

@@ -5,7 +5,7 @@
     python tools/playground_browser_test.py [--site _site] [--browsers chromium firefox]
 
 For each browser: serve the site, load the page, wait for Python to start,
-then check that (1) an example sentence renders READ + BACK, (2) typing UGL
+then check that (1) an example sentence renders TREE + BACK, (2) typing UGL
 decodes live, (3) the readable view matches the library.  Fails on any
 'Could not start Python' status or page/worker error.
 """
@@ -75,7 +75,7 @@ def run(browser_name, url, timeout_ms):
         ugl_in = ugl.load(wsd=False).encode(EN_FOR_UGL)[0]
         page.fill("#ugl", ugl_in)
         page.wait_for_function(
-            "(want) => [...document.querySelectorAll('#results .readable')].some(e => e.textContent.trim() === want)",
+            "(want) => [...document.querySelectorAll('#results .ttext')].some(e => e.textContent.trim() === want)",
             arg=EXPECT_READ, timeout=30000)
         decoded = page.inner_text("#results .back")
         browser.close()

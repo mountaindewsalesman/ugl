@@ -59,6 +59,16 @@ class UGL:
         may become several simpler ones; see simplify)."""
         return self.encoder.encode(text, keep_memory=keep_memory)
 
+    def encode_lines(self, text):
+        """-> list of Line(ugl, source, issues): each UGL line with the English
+        sentence it came from and anything the encoder is unsure of."""
+        return self.encoder.encode_lines(text)
+
+    def encode_with_sources(self, text):
+        """-> [(UGL line, the English sentence it came from)]; a long sentence
+        split by simplify gives several lines with the same source."""
+        return self.encoder.encode(text, with_sources=True)
+
     def decode(self, ugl_text):
         """UGL (one sentence per line) -> English."""
         return self.decoder.decode(ugl_text)

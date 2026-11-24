@@ -34,6 +34,8 @@ NUM_WORDS.update({"thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy"
 DEGREE = {"very": "w", "extremely": "w", "really": "w", "highly": "w", "so": "w", "too": "w",
           "quite": "w", "more": "r", "most": "z", "less": "l", "least": "lz", "not": "x", "n't": "x"}
 QUANT = {"every": "all", "each": "all", "all": "all", "most": "most", "many": "many", "few": "few"}
+# standalone quantifier words that refer back ("both are smelly", "most were sold")
+QUANT_PRONOUNS = {"both": "all", "all": "all", "each": "all", "most": "most", "many": "many", "few": "few"}
 
 # preposition (case + fixed words) -> relation name
 PREP = {
@@ -200,11 +202,51 @@ def subtree_start(t):
     return min([t.i] + [subtree_start(k) for k in t.kids if k.deprel != "punct"])
 
 
-def number_literal(t):
-    w = t.lower.replace(",", "")
-    if w in NUM_WORDS:
-        return "#" + str(NUM_WORDS[w])
-    return "#" + t.form.replace(" ", "_")
+# number words that English also uses as plural nouns: "tens of kilometers"
+NUM_NOUNS = {"ten": 10, "hundred": 100, "thousand": 1000, "million": 10**6, "billion": 10**9,
+             "dozen": 12, "score": 20}
+# amount words that head a noun phrase on their own ("not as much has been done")
+# ("most" is left to QUANT_PRONOUNS: "most were rotten" = most of the apples)
+AMOUNT = {"much": ("much", ""), "more": ("much", "r"), "less": ("much", "l"),
+          "little": ("little", ""), "enough": ("enough", "")}
+
+
+def number_parts(t):
+    """t and the number words that build it with it ("two hundred thousand")."""
+    parts = [k for k in t.kids if k.deprel in ("compound", "flat", "nummod") and
+             (k.upos == "NUM" or k.lower in NUM_WORDS or k.lower in NUM_NOUNS)]
+    return sorted(parts + [t], key=lambda x: x.i)
+
+
+def number_value(words):
+    """English number words -> int, or None: "two hundred thousand" -> 200000."""
+    total = cur = 0
+    seen = False
+    for w in (p for x in words for p in x.replace(",", "").split("-") if p):
+        if w.isdigit():
+            cur += int(w)
+        elif w in NUM_WORDS and NUM_WORDS[w] < 100:
+            cur += NUM_WORDS[w]
+        elif w in ("hundred",):
+            cur = (cur or 1) * 100
+        elif w in NUM_WORDS or w in NUM_NOUNS:
+            v = NUM_WORDS.get(w) or NUM_NOUNS[w]
+            total += (cur or 1) * v
+            cur = 0
+        else:
+            return None
+        seen = True
+    return total + cur if seen else None
+
+
+def number_literal(t, parts=None):
+    """A number (with its number-word parts) -> literal.  Digits stay as
+    written ("1,500" -> #1500, "3.5" -> #3.5); words become digits."""
+    parts = parts or [t]
+    v = number_value([p.lemma if p.upos == "NOUN" else p.lower for p in parts])
+    if v is not None:
+        return "#" + str(v)
+    return "#" + "_".join(p.form for p in parts).replace(",", "")
 
 
 class Analyzer:
@@ -216,6 +258,10 @@ class Analyzer:
     # =============================================================== entry
     def sentence(self, sent, question=False):
         self.toks = build_tokens(sent)
+        self.issues = []                         # what this sentence's UGL may have wrong (see Encoder)
+        for t in self.toks:
+            if t.deprel in ("dep", "orphan", "reparandum", "goeswith", "list"):
+                self.issues.append(f"'{t.form}' has no clear grammatical role ({t.deprel}); left out")
         self.relheads = {}                       # token index of a relative word -> its head entity
         roots = [t for t in self.toks if t.head < 0]
         if not roots:
@@ -316,6 +362,13 @@ class Analyzer:
                 self.adverbial(k, ev)
             elif d in ("obl", "obl:tmod", "obl:npmod", "obl:agent") and k is not agent:
                 ev.rels.append(self.rel_from_case(k))
+            elif d == "advcl" and self.unmarked(k):
+                # "..., observing X": English states no relation (time? cause? manner?),
+                # so UGL states none either: the two clauses are simply joined
+                sub = self.clause(k, inherit_subj=ev.subj)
+                if not set(sub.mods) & set("pf"):          # a participle has no tense of its own
+                    sub.mods += "".join(c for c in ev.mods if c in "pf")
+                ev.coord.append(("and", sub))
             elif d == "advcl" and self.marker(k) == "so":
                 # "A so B": A (the main clause) causes B
                 ev.coord.append(("cause", self.clause(k, inherit_subj=ev.subj)))
@@ -376,6 +429,9 @@ class Analyzer:
             return
         for o in k.dep("obl", "nmod", "obl:npmod"):     # "away [from the stock]"
             ev.rels.append(self.rel_from_case(o))
+        if w in ("all", "both", "each") and ev.subj is not None and not ev.subj.quant:
+            ev.subj.quant = "all"                      # floating quantifier: "the dogs all barked"
+            return
         if w in ("also", "too", "just", "even", "only", "then", "so", "still", "already"):
             return                                     # discourse particles: no content in UGL v0
         ev.manner.append(self.attr(k))
@@ -404,7 +460,10 @@ class Analyzer:
         if not prep:
             rel = "time" if k.deprel in ("obl:tmod", "nmod:tmod") or self.is_time(k, land) else "of"
             return Rel(rel, land)
-        rel = PREP.get(prep) or PREP.get(words[0], "of")
+        rel = PREP.get(prep) or PREP.get(words[0])
+        if rel is None:
+            self.issues.append(f"preposition '{prep}' not in the relation table; read as 'of'")
+            rel = "of"
         if rel in TIME_SENSITIVE and self.is_time(k, land):
             rel = "time"
         return Rel(rel, land, neg=prep in NEGATING)
@@ -428,6 +487,13 @@ class Analyzer:
                 return CONNECTIVE[a.lower]
         cc = k.dep1("cc")
         return CC.get(cc.lower if cc is not None else "and", "and")
+
+    @staticmethod
+    def unmarked(k):
+        """An adverbial clause with no subordinator and no wh-word: a bare
+        participle or verbless phrase ("Running, he fell")."""
+        return (not k.dep("mark") and k.upos in ("VERB", "AUX") and k.xpos in ("VBG", "VBN")
+                and not any(a.lower in ("when", "where", "while", "whenever") for a in k.dep("advmod")))
 
     @staticmethod
     def marker(k):
@@ -506,14 +572,33 @@ class Analyzer:
             inner = self.entity(of)
             inner.quant = self.QUANT_OF[t.lower]
             return inner
+        if t.lemma in NUM_NOUNS and t.upos == "NOUN":
+            # "tens of kilometers": the counted thing, with a count in tens
+            lit = number_literal(t, number_parts(t)) + ("s" if t.f("Number") == "Plur" else "")
+            if of is not None:
+                inner = self.entity(of)
+                inner.count = lit
+                return inner
+            return Entity("reserved", "n3", plural=True, count=lit, pos=t.i)
+        # a quantity word standing as a noun phrase by itself, whatever tag it got
+        alone = (t.upos in ("ADJ", "ADV", "PRON", "DET", "NOUN") and t.deprel not in ("amod", "advmod", "det")
+                 and not t.dep("nsubj", "cop", "det"))
+        if t.lower in QUANT_PRONOUNS and alone:      # "most were rotten", "many came"
+            return self.pronoun(t)
+        if t.lower in AMOUNT and alone:
+            # "not as much has been done": an amount
+            word, mods = AMOUNT[t.lower]
+            a = self.attr(t)
+            return Entity("reserved", "n9", attrs=[Attr(word, "adj", mods + a.mods, t.i)], pos=t.i)
         if t.upos == "PRON" or (t.upos == "DET" and t.deprel not in ("det",)):
             e = self.pronoun(t)
             if e.kind == "reserved":                   # "someone who can help", "something new"
                 self.np_mods(t, e)
             return e
         if t.upos == "NUM" or (t.xpos == "CD"):
-            e = Entity("num", number_literal(t), pos=t.i)
-            self.np_mods(t, e)
+            parts = number_parts(t)
+            e = Entity("num", number_literal(t, parts), pos=t.i)
+            self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e
         if t.upos == "PROPN":
             parts = [c for c in t.dep("flat", "compound") if c.upos == "PROPN"]
@@ -565,7 +650,11 @@ class Analyzer:
             return Entity("reserved", "n3", neg=True)
         if w in ("nobody", "noone", "no-one"):
             return Entity("reserved", "n4", neg=True)
-        if w in ("everything", "everyone", "everybody", "all", "each", "both"):
+        if w in QUANT_PRONOUNS:
+            # "...cats and dogs because both are smelly": coreference finds what
+            # "both" ranges over; unresolved, it falls back to "all things"
+            return Entity("pronoun", w, pos=t.i, person=3, plural=True, quant=QUANT_PRONOUNS[w])
+        if w in ("everything", "everyone", "everybody"):
             return Entity("reserved", "n4" if w.startswith("every") and w != "everything" else "n3", quant="all")
         if w in ("most", "many", "few"):               # "most of these wars": quantifier over the of-phrase
             return Entity("reserved", "n3", quant=QUANT[w])
@@ -602,7 +691,7 @@ class Analyzer:
                 else:
                     e.attrs.append(self.attr(c))
             elif d == "nummod":
-                e.count = number_literal(c)
+                e.count = number_literal(c, number_parts(c))
             elif d == "compound":
                 if c.upos == "PROPN":
                     e.attrs.append(Attr(c.form, "name", "", c.i))

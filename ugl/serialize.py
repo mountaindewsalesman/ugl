@@ -64,12 +64,16 @@ class Serializer:
 
     def np(self, e, quants):
         if e.ref is not None:
-            return self.mention(e)
+            out = self.mention(e)
+            if e.quant:                              # "both" -> all of <what it refers to>
+                quants.append((list(out), V[e.quant]))
+            return out
         if e.kind == "coord":
             return self.coordinated([self.np(m, quants) for m in e.members], e.logic)
         if e.kind == "pronoun":                          # unresolved and not handled by coref
             return ["n3t"]
-        mods = ("s" if e.plural else "") + (e.det if (not e.quant or e.det in "de") else "") \
+        # a quantifier keeps "the": "all the dogs" (that group) is not "all dogs"
+        mods = ("s" if e.plural else "") + e.det \
             + ("x" if e.neg else "") + ("q" if e.question else "")
         if e.kind == "reserved":
             head = [add_mods(e.lemma, mods)]

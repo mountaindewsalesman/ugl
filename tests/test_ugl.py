@@ -138,3 +138,49 @@ if __name__ == "__main__":
     test_humanize()
     test_public_api()
     print("all tests passed")
+
+
+# ------------------------------------------------------------------ bug families
+# each case is one member of a family reported from the playground; the fix is
+# structural, so every member must hold (decoded English shown in comments)
+FAMILIES = [
+    # unmarked participial clause: no invented "when" / "because"
+    ("Running home, he fell.", lambda u, e: "v20" not in u.split() and "v7" not in u.split()),
+    ("How can we model emissions, observing their impacts?", lambda u, e: "when" not in e.lower()),
+    # coordinated "to" complements stay infinitives
+    ("I like to eat food and run.", lambda u, e: "to eat" in e and "that" not in e),
+    ("She wants to sing or dance.", lambda u, e: "to sing or dance" in e),
+    # standalone quantifiers refer back
+    ("He doesn't like cats and dogs because both are smelly.", lambda u, e: "both" in e and "something" not in e),
+    ("I bought the apples. Most were rotten.", lambda u, e: "Most of the apples" in e),
+    ("The dogs all barked.", lambda u, e: "All the dogs" in e),
+    # number words used as nouns
+    ("It spans tens of kilometers.", lambda u, e: "#10s" in u and "tens of" in e),
+    ("Hundreds attended.", lambda u, e: "#100s" in u),
+    ("Two hundred thousand people came.", lambda u, e: "#200000" in u),
+]
+
+
+def test_families():
+    fails = []
+    for en, ok in FAMILIES:
+        lines = ENC.encode(en)
+        u = "\n".join(lines)
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)
+
+
+def test_quality_flags():
+    lines = U.encode_lines("The flurbish gizmo wanged.")
+    assert any("not in the dictionary" in i for l in lines for i in l.issues)
+    lines = U.encode_lines("It was founded in 1877.")
+    assert any("refers to nothing" in i for l in lines for i in l.issues)
+    lines = U.encode_lines("The dog barked.")
+    assert not any(l.issues for l in lines), lines
+
+
+def test_tree_view():
+    rows = U.humanizer.tree(r"#9 v20 n1 v444p n2344t \v20")
+    assert [r["depth"] for r in rows] == [0, 1, 0] and rows[-1]["ugl"] == r"\v20"

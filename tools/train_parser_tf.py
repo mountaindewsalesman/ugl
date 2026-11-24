@@ -35,6 +35,7 @@ OUT = os.path.join(ROOT, "ugl", "parser", "weights", "parser-en-tf.npz")
 MODEL = "google/electra-small-discriminator"
 PENN_XPOS = {"en_ewt", "en_gum"}
 IGNORE = -100
+WSD_PRIOR = 0.05
 MAX_PIECES = 250
 DEVICE = torch.device("cpu")
 
@@ -63,6 +64,24 @@ class TfNet(nn.Module):
         self.lab_W = nn.Parameter(torch.zeros(sizes["deprel"], lab, lab))
         self.lab_lin = nn.Linear(2 * lab, sizes["deprel"])
         self.drop = nn.Dropout(drop)
+        # sense head (ugl/wsd_gloss.py): its own layer mix, context and gloss projections
+        self.wmix = nn.Parameter(torch.zeros(nl))
+        self.wgamma = nn.Parameter(torch.ones(1))
+        self.wsd_ctx, self.wsd_gloss = nn.Linear(d, 256), nn.Linear(d, 256)
+
+    def wsd_states(self, ids, att):
+        out = self.bert(input_ids=ids, attention_mask=att, output_hidden_states=True)
+        hs = torch.stack(out.hidden_states, 0)
+        return self.wgamma * (torch.softmax(self.wmix, 0)[:, None, None, None] * hs).sum(0)   # (B, T, d)
+
+    def wsd_logits(self, w):
+        """Scores of every target word against every gloss in the batch
+        (non-candidates masked out)."""
+        h = self.wsd_states(w["ids"], w["att"])
+        ctx = self.wsd_ctx(self.drop(h[w["tb"], w["tp"]]))                     # (targets, k)
+        g = self.wsd_states(w["gids"], w["gatt"])[:, 0]                          # [CLS] of each gloss
+        scores = ctx @ self.wsd_gloss(g).T                                       # (targets, glosses)
+        return scores.masked_fill(~w["cmask"], -1e9)
 
     def words(self, b):
         out = self.bert(input_ids=b["ids"], attention_mask=b["att"], output_hidden_states=True)
@@ -101,6 +120,82 @@ def encode_sent(s, voc, wp):
             "feats": ids_("feats", [t["feats"] for t in s]),
             "head": [t["head"] for t in s],
             "deprel": ids_("deprel", [t["deprel"] for t in s])}
+
+
+# ------------------------------------------------------------------ sense data
+def wsd_examples(lex, wp, ranges):
+    """SemCor sentences -> (piece ids, [(first piece, candidate senses, gold index)])."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from eval_wsd import items
+    out = []
+    for start, end in ranges:
+        for words, targets in items(end - start, start):
+            ids, first = wp.encode_words(words)
+            if len(ids) > MAX_PIECES:
+                continue
+            tg = []
+            for i, lemma, sense, cls in targets:
+                cands = lex.senses(lemma, cls)[:12]
+                if i < len(first) and len(cands) >= 2 and sense in cands:
+                    tg.append((first[i], cands, cands.index(sense)))
+            if tg:
+                out.append((ids, tg))
+    return out
+
+
+GLOSS_IDS = {}
+
+
+def gloss_ids(lex, wp, sense):
+    from ugl.wsd_gloss import gloss_words, MAX_GLOSS_PIECES
+    if sense not in GLOSS_IDS:
+        ids, _ = wp.encode_words(gloss_words(lex, sense))
+        GLOSS_IDS[sense] = ids[: MAX_GLOSS_PIECES - 1] + [ids[-1]]
+    return GLOSS_IDS[sense]
+
+
+def wsd_batch(exs, lex, wp):
+    T = max(len(e[0]) for e in exs)
+    ids = torch.zeros(len(exs), T, dtype=torch.long)
+    att = torch.zeros(len(exs), T, dtype=torch.long)
+    tb, tp, targets, senses = [], [], [], {}
+    for bi, (pid, tg) in enumerate(exs):
+        ids[bi, : len(pid)] = torch.tensor(pid)
+        att[bi, : len(pid)] = 1
+        for pos, cands, gold in tg:
+            tb.append(bi)
+            tp.append(pos)
+            targets.append((cands, gold))
+            for c in cands:
+                senses.setdefault(c, len(senses))
+    G = [gloss_ids(lex, wp, s) for s in senses]
+    gT = max(len(g) for g in G)
+    gids = torch.zeros(len(G), gT, dtype=torch.long)
+    gatt = torch.zeros(len(G), gT, dtype=torch.long)
+    for i, g in enumerate(G):
+        gids[i, : len(g)] = torch.tensor(g)
+        gatt[i, : len(g)] = 1
+    cmask = torch.zeros(len(targets), len(G), dtype=torch.bool)
+    gold = torch.zeros(len(targets), dtype=torch.long)
+    for t, (cands, g) in enumerate(targets):
+        for c in cands:
+            cmask[t, senses[c]] = True
+        gold[t] = senses[cands[g]]
+    d = {"ids": ids, "att": att, "tb": torch.tensor(tb), "tp": torch.tensor(tp), "gids": gids, "gatt": gatt,
+         "cmask": cmask, "gold": gold}
+    return {k: v.to(DEVICE) for k, v in d.items()}
+
+
+def wsd_eval(net, exs, lex, wp, bs=8):
+    net.eval()
+    hit = tot = 0
+    with torch.no_grad():
+        for i in range(0, len(exs), bs):
+            w = wsd_batch(exs[i:i + bs], lex, wp)
+            hit += (net.wsd_logits(w).argmax(-1) == w["gold"]).sum().item()
+            tot += len(w["gold"])
+    net.train()
+    return hit / max(1, tot)
 
 
 def batchify(encs):
@@ -153,7 +248,9 @@ def export(net, vocabs, wp, path, treebanks):
         else:
             out[k] = v
     out["mix"] = (torch.softmax(net.mix, 0) * net.gamma).detach().cpu().numpy()
-    out.pop("gamma", None)
+    out["wsd.mix"] = (torch.softmax(net.wmix, 0) * net.wgamma).detach().cpu().numpy()
+    for k in ("gamma", "wmix", "wgamma"):
+        out.pop(k, None)
     out = {k: v.astype(np.float16) if v.ndim >= 2 and v.size > 50000 else v.astype(np.float32)
            for k, v in out.items()}
     cfg = net.bert.config
@@ -161,7 +258,8 @@ def export(net, vocabs, wp, path, treebanks):
             "lowercase": wp.lowercase,
             "transformer": {"layers": cfg.num_hidden_layers, "heads": cfg.num_attention_heads,
                             "eps": cfg.layer_norm_eps, "base": MODEL},
-            "trained": time.strftime("%Y-%m-%d %H:%M"), "treebanks": treebanks}
+            "trained": time.strftime("%Y-%m-%d %H:%M"), "treebanks": treebanks,
+            "wsd_prior": WSD_PRIOR}           # retune with tools/eval_wsd.py --gloss
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez_compressed(path, meta=np.array(json.dumps(meta)), **out)
 
@@ -204,6 +302,8 @@ def main():
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--wsd-bs", type=int, default=8, help="SemCor sentences per sense batch (one per parser batch)")
+    ap.add_argument("--no-wsd", action="store_true")
     a = ap.parse_args()
     global DEVICE, MODEL
     DEVICE, MODEL = torch.device(a.device), a.model
@@ -237,6 +337,14 @@ def main():
     E_test = [e for e in (encode_sent(s, voc, wp) for s in test) if e is not None]
     print(f"training on {[os.path.basename(f) for f in files]}: {len(E_train)} sentences, device {DEVICE}", flush=True)
 
+    lex = W_train = W_dev = None
+    if not a.no_wsd:
+        from ugl.lexicon import Lexicon
+        lex = Lexicon()
+        # SemCor 20000..22000 is held out: eval_wsd.py tests on 20000..20400, dev here is 21000..21600
+        W_train = wsd_examples(lex, wp, [(0, 300 if a.quick else 20000), (22000, 22000 if a.quick else 40000)])
+        W_dev = wsd_examples(lex, wp, [(21000, 21100 if a.quick else 21600)])
+        print(f"sense data: {len(W_train)} SemCor sentences, dev {len(W_dev)}", flush=True)
     sizes = {k: len(v) for k, v in vocabs.items()}
     net = TfNet(a.model, sizes).to(DEVICE)
     bert_p = list(net.bert.parameters())
@@ -255,7 +363,9 @@ def main():
         batches = [order[i:i + a.bs] for i in range(0, len(order), a.bs)]
         random.shuffle(batches)
         tot_loss = 0.0
-        for bi in batches:
+        if W_train:
+            random.shuffle(W_train)
+        for step, bi in enumerate(batches):
             b = batchify([E_train[i] for i in bi])
             h, S, ld, lh = net(b)
             m = b["mask"]
@@ -269,6 +379,10 @@ def main():
                 gold = b[k][m]
                 if (gold != IGNORE).any():
                     loss = loss + F.cross_entropy(getattr(net, k)(h)[m], gold, ignore_index=IGNORE)
+            if W_train:                     # one sense batch per parser batch, same optimizer step
+                k0 = (step * a.wsd_bs) % len(W_train)
+                w = wsd_batch(W_train[k0:k0 + a.wsd_bs] or W_train[: a.wsd_bs], lex, wp)
+                loss = loss + F.cross_entropy(net.wsd_logits(w), w["gold"])
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), 5.0)
@@ -276,9 +390,11 @@ def main():
             sched.step()
             tot_loss += loss.item()
         up, ua, la = evaluate(net, E_dev)
-        print(f"epoch {ep:2}  loss {tot_loss/len(batches):.3f}  dev UPOS {up:.4f} UAS {ua:.4f} LAS {la:.4f}  ({time.time()-t0:.0f}s)", flush=True)
-        if la > best:
-            best = la
+        wa = wsd_eval(net, W_dev, lex, wp) if W_dev else 0.0
+        print(f"epoch {ep:2}  loss {tot_loss/len(batches):.3f}  dev UPOS {up:.4f} UAS {ua:.4f} LAS {la:.4f}"
+              f"  sense {wa:.4f}  ({time.time()-t0:.0f}s)", flush=True)
+        if la + wa > best:                  # both jobs count when picking the epoch
+            best = la + wa
             best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
     net.load_state_dict(best_state)
     up, ua, la = evaluate(net, E_test)

@@ -133,6 +133,19 @@ def canon_mods(mods):
     return "".join(c for c in MOD_ORDER if c in s)
 
 
+ROUND_NUMBERS = {10: "ten", 12: "dozen", 20: "score", 100: "hundred", 1000: "thousand",
+                 10**6: "million", 10**9: "billion"}
+
+
+def number_text(raw):
+    """Number literal -> English: "#9" -> "9", "#10s" -> "tens" (an amount
+    counted in tens), "#1000s" -> "thousands"."""
+    body = raw[1:]
+    if body.endswith("s") and body[:-1].isdigit() and int(body[:-1]) in ROUND_NUMBERS:
+        return ROUND_NUMBERS[int(body[:-1])] + "s"
+    return body.replace("_", " ")
+
+
 def tok(cls, idx, mods=""):
     return f"{cls}{idx}{canon_mods(mods)}"
 

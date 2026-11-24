@@ -172,7 +172,12 @@ class ParserModel:
         xpos = self.lin("xpos", Hs).argmax(1)
         feats = self.lin("feats", Hs).argmax(1)
 
-        heads = self.decode_tree(self.arc_scores(Hs))
+        S = self.arc_scores(Hs)
+        heads = self.decode_tree(S)
+        P = S[1:] - S[1:].max(1, keepdims=True)
+        np.fill_diagonal(P[:, 1:], -1e9)                    # a word cannot head itself
+        P = np.exp(P)
+        P /= P.sum(1, keepdims=True)
 
         ld, lh = self.mlp("lab_dep", H), self.mlp("lab_head", H)
         W = self.w["lab_W"]                                   # (L, a, a)
@@ -183,5 +188,6 @@ class ParserModel:
             out.append({"form": words[i - 1], "upos": self.labels["upos"][upos[i - 1]],
                         "xpos": self.labels["xpos"][xpos[i - 1]],
                         "feats": self.labels["feats"][feats[i - 1]],
-                        "head": int(j), "deprel": self.labels["deprel"][int(s.argmax())]})
+                        "head": int(j), "deprel": self.labels["deprel"][int(s.argmax())],
+                        "conf": float(P[i - 1, j])})       # probability of the chosen head
         return out

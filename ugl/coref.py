@@ -14,6 +14,7 @@ from .ir import Entity, Event, Rel
 PERSONAL = {"he", "him", "his", "himself", "she", "her", "hers", "herself"}
 NEUTER = {"it", "its", "itself"}
 PLURAL = {"they", "them", "their", "theirs", "themselves"}
+QUANTIFIER = {"both", "all", "each", "most", "many", "few"}     # "both are smelly" = all of them
 REFLEXIVE = {"himself", "herself", "itself", "themselves"}
 RELATIVE = {"who", "whom", "which", "that", "whose"}
 WINDOW = 2
@@ -66,8 +67,10 @@ def _order(item):
     return (item[2], e.pos if e.pos is not None else 10**6)
 
 
-def resolve(events):
-    """events: list of sentence-level Events (one document).  Mutates in place."""
+def resolve(events, unresolved=None):
+    """events: list of sentence-level Events (one document).  Mutates in place.
+    unresolved: optional list; gets (sentence index, pronoun) for every pronoun
+    with nothing to refer to (it then becomes someone / the thing)."""
     found = []
     for i, ev in enumerate(events):
         if ev is not None:
@@ -78,6 +81,8 @@ def resolve(events):
         if e.kind == "pronoun" and e.ref is None and e.lemma not in RELATIVE:
             e.ref = pick(e, role, sno, csubj, seen)
             if e.ref is None:
+                if unresolved is not None:
+                    unresolved.append((sno, e.lemma))
                 fallback(e)
         elif e.kind in ("lex", "name", "coord") and e.ref is None:
             seen.append((e, role, sno))
@@ -93,11 +98,15 @@ def pick(p, role, sno, csubj, seen):
         ok = lambda e: (e.kind == "name" or e.is_person) and not e.plural and e.kind != "coord"
     elif w in NEUTER:
         ok = lambda e: e.kind == "lex" and not e.is_person and not e.plural
-    elif w in PLURAL:
+    elif w in PLURAL or w in QUANTIFIER:
         ok = lambda e: e.plural or e.kind == "coord"
     else:
         return None
     cands = [s for s in recent if ok(s[0])]
+    if w in PLURAL or w in QUANTIFIER:
+        # "cats and dogs ... both / they": the group, not its last member
+        inside = {id(m) for s in cands if s[0].kind == "coord" for m in s[0].members}
+        cands = [s for s in cands if id(s[0]) not in inside]
     if role in ("obj", "obl") and csubj is not None:
         # an ordinary (non-reflexive) pronoun never means its own clause's
         # subject: "John saw him" -> him != John (that would be "himself")
@@ -114,7 +123,9 @@ def pick(p, role, sno, csubj, seen):
 
 def fallback(p):
     """Unresolvable pronoun -> reserved noun (someone / the thing / the things)."""
-    if p.lemma in PERSONAL:
+    if p.lemma in QUANTIFIER:                  # nothing to range over: "all things" (quant kept)
+        p.kind, p.lemma, p.plural = "reserved", "n3", True
+    elif p.lemma in PERSONAL:
         p.kind, p.lemma = "reserved", "n4"
     elif p.lemma in PLURAL:
         p.kind, p.lemma, p.det, p.plural = "reserved", "n3", "t", True
