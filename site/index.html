@@ -23,8 +23,8 @@
 <main class="wrap">
   <section class="panel" aria-labelledby="en-h">
     <h2 id="en-h">English &rarr; UGL</h2>
-    <p class="hint">Pick an example. These were encoded by the real encoder (spaCy
-      <span data-info="model">en_core_web_md</span>) when this site was built.</p>
+    <p class="hint">Type English or pick an example. It is encoded live, in your browser, by UGL's
+      own parser (pure Python + numpy in Pyodide). Word meanings use the most frequent sense.</p>
     <div id="examples" class="chips"></div>
     <details class="more">
       <summary>All <span id="gallery-count"></span> examples</summary>
@@ -34,13 +34,7 @@
       <span>English</span>
       <textarea id="en" rows="2" spellcheck="true" placeholder="Pick an example above, or type English"></textarea>
     </label>
-    <div id="en-note" class="note" hidden>
-      <p><strong>Live English encoding needs the local install.</strong> The encoder parses English
-        with spaCy, which does not run in the browser yet, so this page only has the examples above.
-        To encode your own text:</p>
-      <pre class="cmd"><code id="install-cmd">pip install git+https://github.com/mountaindewsalesman/ugl.git</code><button class="copy" data-copy="install-cmd" type="button">Copy</button></pre>
-      <pre class="cmd"><code id="run-cmd"></code><button class="copy" data-copy="run-cmd" type="button">Copy</button></pre>
-    </div>
+    <p id="en-note" class="note" hidden></p>
   </section>
 
   <section class="panel" aria-labelledby="ugl-h">

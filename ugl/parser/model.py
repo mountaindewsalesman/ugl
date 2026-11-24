@@ -31,6 +31,7 @@ def _relu(x):
 
 class ParserModel:
     def __init__(self, path=DEFAULT_PATH, data=None):
+        self.path = path
         z = np.load(path if data is None else data, allow_pickle=False)
         self.w = {k: z[k].astype(np.float32) for k in z.files if k != "meta"}
         meta = json.loads(str(z["meta"]))

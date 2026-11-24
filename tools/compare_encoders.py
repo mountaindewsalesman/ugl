@@ -25,7 +25,7 @@ sys.path.insert(0, ROOT)
 import ugl  # noqa: E402
 from ugl.analyze import Analyzer  # noqa: E402
 from ugl.coref import resolve  # noqa: E402
-from ugl.encoder_ud import UDEncoder  # noqa: E402
+from ugl.encoder import Encoder  # noqa: E402
 from ugl.parser.conllu import read_conllu  # noqa: E402
 from ugl.serialize import Serializer  # noqa: E402
 
@@ -130,9 +130,9 @@ def stats(name, u, enc, sents):
 
 def wiki_eval(u, n, dump):
     sents = wiki_sentences(n)
-    from ugl.encoder import Encoder
-    old = Encoder(u.lexicon)
-    new = UDEncoder(u.lexicon)
+    from ugl.encoder_spacy import SpacyEncoder
+    old = SpacyEncoder(u.lexicon)
+    new = Encoder(u.lexicon)
     print(f"{n} Wikipedia sentences")
     o = stats("old", u, old, sents)
     w = stats("new", u, new, sents)

@@ -3,7 +3,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const REPO = "git+https://github.com/mountaindewsalesman/ugl.git";
 
 function el(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -45,11 +44,11 @@ worker.onmessage = (ev) => {
 };
 worker.onerror = (e) => onFatal(e.message || "the Python worker could not start");
 
-function ask(text) {
+function ask(text, cmd = "analyze") {
   const id = ++state.seq;
   return new Promise((resolve, reject) => {
     waiting.set(id, { resolve, reject });
-    worker.postMessage({ id, cmd: "analyze", text });
+    worker.postMessage({ id, cmd, text });
   }).then((data) => ({ id, data }));
 }
 
@@ -76,7 +75,7 @@ function onReady(info) {
     `Ready: ugl ${info.ugl_version}, dictionary ${info.dictionary_version}, ` +
     `${info.vocab_size.toLocaleString()} token ids, Python ${info.python} (Pyodide ${info.pyodide})`;
   $("status-num").textContent = "";
-  analyze();
+  if ($("en").value.trim()) onEnglish(); else analyze();
 }
 
 function onFatal(msg) {
@@ -91,8 +90,7 @@ function onFatal(msg) {
 // ------------------------------------------------------------ inputs
 function loadExample(g) {
   $("en").value = g.en;
-  $("en-note").hidden = true;
-  setUGL(g.ugl.join("\n"));
+  onEnglish();
 }
 
 function setUGL(text) {
@@ -100,14 +98,24 @@ function setUGL(text) {
   analyze();
 }
 
-function onEnglish() {
+let encodeSeq = 0;
+async function onEnglish() {
   const text = $("en").value;
-  const hit = state.gallery.find((g) => norm(g.en) === norm(text));
-  if (hit) return loadExample(hit);
   const note = $("en-note");
-  note.hidden = !text.trim();
-  const quoted = '"' + text.trim().replace(/\s+/g, " ").replace(/(["\\$`])/g, "\\$1") + '"';
-  $("run-cmd").textContent = `ugl roundtrip ${quoted} --gloss`;
+  if (!text.trim()) { note.hidden = true; return; }
+  if (!state.ready) { note.hidden = false; note.textContent = "Waiting for Python to load..."; return; }
+  const mine = ++encodeSeq;
+  note.hidden = false;
+  note.textContent = "Encoding...";
+  try {
+    const { data } = await ask(text, "encode");
+    if (mine !== encodeSeq) return;            // a newer edit is on its way
+    note.textContent = data.unknown.length ? `Not in the dictionary (kept as literals): ${data.unknown.join(", ")}` : "";
+    note.hidden = !data.unknown.length;
+    setUGL(data.ugl.join("\n"));
+  } catch (err) {
+    if (mine === encodeSeq) { note.hidden = false; note.textContent = "Could not encode: " + (err.message || err); }
+  }
 }
 
 async function analyze() {
@@ -215,13 +223,11 @@ document.addEventListener("click", async (ev) => {
 });
 
 $("en").addEventListener("input", debounce(onEnglish, 250));
-$("ugl").addEventListener("input", debounce(() => {
-  // the English box only ever shows the source of a gallery entry; once the
-  // UGL is edited away from it, the English no longer describes it
-  const src = state.gallery.find((g) => norm(g.en) === norm($("en").value));
-  if (src && src.ugl.join("\n") !== $("ugl").value.trim()) $("en").value = "";
-  analyze();
-}, 200));
+const analyzeSoon = debounce(analyze, 200);
+$("ugl").addEventListener("input", () => {
+  encodeSeq++;            // the user is editing UGL directly: drop any pending English encode
+  analyzeSoon();
+});
 
 async function init() {
   const [manifest, gallery] = await Promise.all([
@@ -230,8 +236,6 @@ async function init() {
   ]);
   state.manifest = manifest;
   state.gallery = gallery;
-  for (const e of document.querySelectorAll('[data-info="model"]')) e.textContent = manifest.gallery.model;
-  $("install-cmd").textContent = `pip install ${REPO}`;
   $("gallery-count").textContent = gallery.length;
   $("examples").replaceChildren(...gallery.slice(0, 8).map((g) =>
     el("button", { type: "button", class: "chip example", onclick: () => loadExample(g) }, g.en)));
@@ -242,8 +246,8 @@ async function init() {
   const commitLink = manifest.commit
     ? el("a", { href: `https://github.com/mountaindewsalesman/ugl/commit/${manifest.commit}` }, commit) : commit;
   $("footer").replaceChildren(el("p", {},
-    "Built ", manifest.built, " from ", commitLink, ". Examples encoded with spaCy ", manifest.gallery.spacy,
-    " + ", manifest.gallery.model, ", ", manifest.gallery.sense_choice, ". ",
+    "Built ", manifest.built, " from ", commitLink, ". Parser ", manifest.gallery.parser,
+    ", ", manifest.gallery.sense_choice, ". ",
     el("a", { href: "https://github.com/mountaindewsalesman/ugl" }, "Source on GitHub"), "."));
   loadExample(gallery[0]);
 }

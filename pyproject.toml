@@ -11,14 +11,14 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "lemminflect>=0.2.3",
-    "spacy>=3.8,<3.9",
-    "en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
-# rebuilding dictionaries / fetching corpora / evaluating sense choice
-build = ["nltk>=3.9", "requests>=2.31"]
-dev = ["pytest>=8", "nltk>=3.9", "requests>=2.31"]
+# the legacy spaCy encoder; rebuilding dictionaries (spaCy counts the corpus and
+# parses glosses); dev tools
+spacy = ["spacy>=3.8,<3.9", "en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl"]
+build = ["ugl[spacy]", "nltk>=3.9", "requests>=2.31", "torch>=2.2"]
+dev = ["ugl[build]", "pytest>=8", "playwright>=1.40"]
 
 [project.scripts]
 ugl = "ugl.__main__:main"

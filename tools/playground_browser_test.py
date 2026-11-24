@@ -50,6 +50,15 @@ def run(browser_name, url, timeout_ms):
         if "Could not start" in status:
             browser.close()
             return False, [status] + errors
+        # 0. type English -> live encoding in the browser == CPython's encoding
+        import json
+        gallery = json.loads(page.evaluate("() => fetch('gallery.json').then(r => r.text())"))
+        for g in gallery[:6]:
+            page.fill("#en", g["en"])
+            page.wait_for_function("(want) => document.getElementById('ugl').value.trim() === want",
+                                   arg="\n".join(g["ugl"]), timeout=60000)
+        print(f"  [{browser_name}] live-encoded {min(6, len(gallery))} typed sentences, identical to CPython")
+        page.fill("#en", "")
         # 1. first example button -> results with READ and BACK rows
         page.click("#examples button >> nth=0")
         page.wait_for_selector("#results .back", timeout=30000)

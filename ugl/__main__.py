@@ -137,8 +137,8 @@ def main(argv=None):
         while len(sents) < a.n:
             with open(rng.choice(files), encoding="utf-8") as f:
                 paras = [p for p in f.read().split("\n") if len(p) > 60]
-            doc = enc.nlp(rng.choice(paras)[:2000])
-            cand = [s.text.strip() for s in doc.sents if 6 <= len(s) <= 30]
+            from .parser.tokenize import split_sentences
+            cand = [x for x in split_sentences(rng.choice(paras)[:2000]) if 6 <= len(x.split()) <= 30]
             if cand:
                 sents.append(rng.choice(cand))
         for s_ in sents:

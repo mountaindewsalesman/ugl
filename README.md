@@ -17,14 +17,15 @@ UGL : n988 v9 n988 v4520 \v9
 ```
 
 Everything runs locally. There is no cloud service and no large language
-model. The only neural parts are spaCy's small parser and word vectors
-(`en_core_web_md`).
+model. English is parsed by UGL's own tagger and dependency parser (a BiLSTM
+trained on five Universal Dependencies English treebanks), which runs on
+numpy alone.
 
-**Playground:** https://mountaindewsalesman.github.io/ugl/ decodes, tokenizes
-and explains UGL in the browser, running this repo's code in Pyodide. spaCy
-does not run in the browser, so English examples there are encoded when the
-site is built (`tools/build_playground.py`, deployed by
-`.github/workflows/pages.yml` on every push to `main`).
+**Playground:** https://mountaindewsalesman.github.io/ugl/ encodes English,
+decodes, tokenizes and explains UGL live in the browser. It runs this repo's
+own Python code in Pyodide. The site is rebuilt from `main` on every push
+(`.github/workflows/pages.yml`) and tested in real Chromium and Firefox
+before it deploys.
 
 ## Install
 
@@ -33,8 +34,9 @@ From the repo folder:
 ```
 python -m venv .venv
 .venv\Scripts\activate            # (Linux/macOS: source .venv/bin/activate)
-pip install -e .                  # library + spaCy model (~45 MB download)
-pip install -e .[dev]             # + tools to rebuild dictionaries / run tests
+pip install -e .                  # library: numpy + lemminflect only
+pip install -e .[spacy]           # + the legacy spaCy encoder (ugl.load(engine="spacy"))
+pip install -e .[dev]             # + tools to rebuild dictionaries, train models, run tests
 ```
 
 Or straight from GitHub, with no clone needed:
@@ -114,10 +116,24 @@ Dictionary 0.1.0 was built from 30M characters of Wikipedia (2.07M words):
 |---|---|---|
 | corpus | `scripts/fetch_wikipedia.py` | MediaWiki API or dump streaming |
 | numbering | `ugl/build_lexicon.py` | frequency per WordNet sense, gloss decomposition |
-| English → UGL | `ugl/encoder.py` | spaCy dependency parse + ~40 rewrite rules |
+| tokenize + parse | `ugl/parser/` | sentence splitter, UD-style tokenizer, BiLSTM tagger + biaffine parser (numpy inference) |
+| meaning | `ugl/analyze.py`, `ugl/coref.py` | UD tree → who-did-what-to-whom graph (`ugl/ir.py`); pronoun resolution |
+| English → UGL | `ugl/serialize.py` | the single place that writes UGL from the graph |
 | UGL → English | `ugl/decoder.py` | recursive-descent parser + realiser (`lemminflect`); no neural net |
 
-## Measured on 121 random Wikipedia sentences
+## Parser (EWT test set)
+
+| model | UPOS | UAS | LAS |
+|---|---|---|---|
+| EWT only, CPU (v1) | 96.0 | 86.9 | 83.9 |
+| **EWT + GUM + LinES + ParTUT + Atis, GPU (default)** | **96.1** | **88.9** | **86.0** |
+
+Train with `python tools/train_parser.py` (it uses a CUDA GPU if there is one),
+score with `tools/eval_parser.py`. `tools/compare_encoders.py --gold N` encodes
+hand-annotated trees and predicted trees side by side. The analyzer and
+serializer run without errors on all 1,500 sampled test trees.
+
+## Measured on 121 random Wikipedia sentences (first version)
 
 * **0.94** UGL tokens per English word. Some content is currently dropped (see
   below), so the true figure is a little higher.

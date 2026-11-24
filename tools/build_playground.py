@@ -14,13 +14,13 @@ What it produces:
   * pyodide/        the Pyodide runtime + numpy, served from the same origin
                     (browsers refuse cross-origin module loads inside workers,
                     and the site then has no third-party runtime dependency)
-  * gallery.json    the English examples in site/gallery.txt, encoded by the
-                    REAL encoder (spaCy en_core_web_md) at build time
+  * gallery.json    the English examples in site/gallery.txt with their UGL from
+                    CPython; the page encodes them again live in Pyodide and the
+                    tests require both to be identical
   * manifest.json   versions and file names the page loads
 
-spaCy cannot run in Pyodide (no WebAssembly builds of spaCy, thinc, blis,
-cymem, preshed or murmurhash exist), so English -> UGL happens here, at
-deploy time, and the page decodes/tokenizes/explains live.
+The encoder runs UGL's own numpy parser, so English -> UGL, decoding,
+tokenizing and explanations all run live in the browser.
 """
 import argparse
 import datetime
@@ -49,14 +49,20 @@ def read_gallery():
 
 
 def build_bundle(path):
-    """ugl/*.py + dictionary/default.txt + the default dictionary, as a zip
-    whose top-level folder is `ugl/` (importable once unpacked on sys.path)."""
+    """The ugl package (all .py files, the parser weights) + the default
+    dictionary, as a zip whose top-level folder is `ugl/`."""
     pkg = os.path.join(ROOT, "ugl")
     dict_file = default_path()
+    from ugl.parser.model import DEFAULT_PATH as PARSER
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in sorted(os.listdir(pkg)):
-            if name.endswith(".py"):
-                z.write(os.path.join(pkg, name), f"ugl/{name}")
+        for dirpath, dirs, files in os.walk(pkg):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", "models")]
+            for name in sorted(files):
+                if name.endswith(".py"):
+                    full = os.path.join(dirpath, name)
+                    z.write(full, "ugl/" + os.path.relpath(full, pkg).replace(os.sep, "/"))
+        z.write(PARSER, "ugl/" + os.path.relpath(PARSER, pkg).replace(os.sep, "/"),
+                compress_type=zipfile.ZIP_STORED)
         z.write(os.path.join(DICT_DIR, "default.txt"), "ugl/dictionary/default.txt")
         # already gzipped: store it rather than compressing twice
         z.write(dict_file, f"ugl/dictionary/{os.path.basename(dict_file)}",
@@ -121,13 +127,13 @@ def fetch_pyodide(version, out_dir, packages=("numpy",)):
 
 
 def encode_gallery(sentences):
-    u = ugl.UGL(wsd=False)      # most-frequent-sense, same as a plain `pip install`
+    u = ugl.UGL(wsd=False)      # most-frequent-sense: the browser has no BERT sense model
     items = []
     for en in sentences:
         items.append({"en": en, "ugl": u.encode(en)})
         print(f"  {en}\n    -> " + "\n    -> ".join(items[-1]["ugl"]))
-    nlp = u.encoder.nlp
-    model = f"{nlp.meta['lang']}_{nlp.meta['name']}-{nlp.meta['version']}"
+    meta = u.encoder.parser.meta
+    model = f"{os.path.basename(u.encoder.parser.path)} ({', '.join(meta.get('treebanks', []))})"
     return items, model
 
 
@@ -139,7 +145,12 @@ import ugl, playground
 assert os.path.dirname(ugl.__file__) == os.path.join(lib, "ugl"), ugl.__file__
 playground.init()
 gallery = json.load(open(os.path.join(site, "gallery.json"), encoding="utf-8"))
-print(json.dumps([json.loads(playground.analyze("\n".join(g["ugl"]))) for g in gallery]))
+out = []
+for g in gallery:
+    enc = json.loads(playground.encode(g["en"]))
+    assert enc["ugl"] == g["ugl"], (g["en"], enc["ugl"], g["ugl"])
+    out.append(json.loads(playground.analyze("\n".join(g["ugl"]))))
+print(json.dumps(out))
 """
 
 
@@ -231,8 +242,7 @@ def main(argv=None):
         "bundle_bytes": os.path.getsize(os.path.join(out, "ugl-py.zip")),
         "wheels": [f"wheels/{wheel}"],
         "pyodide": {"version": pv, "path": "pyodide/", "packages": py_pkgs},
-        "gallery": {"file": "gallery.json", "spacy": md.version("spacy"), "model": model,
-                    "sense_choice": "most frequent sense"},
+        "gallery": {"file": "gallery.json", "parser": model, "sense_choice": "most frequent sense"},
         "commit": commit,
         "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }

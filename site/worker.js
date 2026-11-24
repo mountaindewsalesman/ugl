@@ -1,7 +1,7 @@
 // Runs the real ugl package in Pyodide, off the main thread.
 // This is a MODULE worker (new Worker(url, {type: "module"})): Pyodide 0.28+
 // only supports module workers and is loaded as an ES module.
-// Messages in:  {id, cmd: "analyze", text}
+// Messages in:  {id, cmd: "analyze" | "encode", text}
 // Messages out: {type: "progress", label, loaded?, total?}
 //               {type: "ready", info}
 //               {type: "result", id, data} | {type: "error", id?, message}
@@ -75,8 +75,8 @@ self.onmessage = async (ev) => {
   const { id, cmd, text } = ev.data;
   try {
     const { glue } = await ready;
-    if (cmd !== "analyze") throw new Error("unknown command " + cmd);
-    self.postMessage({ type: "result", id, data: JSON.parse(glue.analyze(text)) });
+    if (cmd !== "analyze" && cmd !== "encode") throw new Error("unknown command " + cmd);
+    self.postMessage({ type: "result", id, data: JSON.parse(glue[cmd](text)) });
   } catch (err) {
     self.postMessage({ type: "error", id, message: String(err && err.message || err) });
   }

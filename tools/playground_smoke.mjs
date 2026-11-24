@@ -32,8 +32,8 @@ globalThis.self = {
 (async () => {
   const t0 = Date.now();
   await import(pathToFileURL(path.resolve(siteDir, "worker.js")).href);
-  const ask = (text) => new Promise((res) => {
-    const id = nextId++; pending.set(id, res); self.onmessage({ data: { id, cmd: "analyze", text } });
+  const ask = (text, cmd = "analyze") => new Promise((res) => {
+    const id = nextId++; pending.set(id, res); self.onmessage({ data: { id, cmd, text } });
   });
   await readyP;
   console.log("boot ms", Date.now() - t0);
@@ -41,11 +41,16 @@ globalThis.self = {
   const out = { gallery: [] };
   const t1 = Date.now();
   for (const g of gallery) {
+    // live encoding in Pyodide must give exactly what CPython gave at build time
+    const e = await ask(g.en, "encode");
+    if (e.type !== "result") throw new Error(g.en + ": " + e.message);
+    if (JSON.stringify(e.data.ugl) !== JSON.stringify(g.ugl))
+      throw new Error(`encode differs for ${JSON.stringify(g.en)}:\n pyodide ${JSON.stringify(e.data.ugl)}\n cpython ${JSON.stringify(g.ugl)}`);
     const m = await ask(g.ugl.join("\n"));
     if (m.type !== "result") throw new Error(g.en + ": " + m.message);
     out.gallery.push({ en: g.en, ugl: g.ugl, ids: m.data.ids, sentences: m.data.sentences });
   }
-  console.log("decoded", gallery.length, "entries in ms", Date.now() - t1);
+  console.log("encoded + decoded", gallery.length, "entries in ms", Date.now() - t1, "(encodings identical to CPython)");
   out.bad = (await ask("n1 v444p n2344t\nnot_a_token v1\nn1 \\v20")).data;
   out.explain = (await ask("n988st v9 'John'y #9 n?blorft nv444t a6w \\v9")).data;
   fs.writeFileSync(outPath, JSON.stringify(out, null, 1));

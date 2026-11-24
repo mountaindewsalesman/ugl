@@ -17,11 +17,13 @@ from .tokenizer import Tokenizer
 
 class UGL:
     """A dictionary plus the encoder, decoder and tokenizer built on it.
-    The spaCy model is only loaded the first time you encode English."""
+    The parser is only loaded the first time you encode English."""
 
-    def __init__(self, dictionary=None, wsd=True):
+    def __init__(self, dictionary=None, wsd=True, engine="ugl"):
         """wsd: True = contextual sense model if installed, False = most
-        frequent sense, or a path to a centroid file."""
+        frequent sense, or a path to a centroid file.
+        engine: "ugl" (own numpy parser, default) or "spacy" (legacy)."""
+        self.engine = engine
         self.wsd = None
         self.lexicon = Lexicon(dictionary)
         self.decoder = Decoder(self.lexicon)
@@ -34,8 +36,12 @@ class UGL:
     @property
     def encoder(self):
         if self._encoder is None:
-            from .encoder import Encoder
-            self._encoder = Encoder(self.lexicon)
+            if self.engine == "spacy":
+                from .encoder_spacy import SpacyEncoder
+                self._encoder = SpacyEncoder(self.lexicon)
+            else:
+                from .encoder import Encoder
+                self._encoder = Encoder(self.lexicon)
             if self._want_wsd:
                 self.wsd = _attach_context_wsd(self.lexicon, self._want_wsd)
         return self._encoder
@@ -86,8 +92,8 @@ def _attach_context_wsd(lexicon, want):
 CONTEXT_PRIOR_WEIGHT = 0.05   # best on held-out SemCor: 73.5% vs 66.8% most-frequent-sense
 
 
-def load(dictionary=None, wsd=True):
-    return UGL(dictionary, wsd)
+def load(dictionary=None, wsd=True, engine="ugl"):
+    return UGL(dictionary, wsd, engine)
 
 
 def default():

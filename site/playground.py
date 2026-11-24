@@ -83,6 +83,12 @@ def explain_token(t):
     return {"token": t, "kind": "bad", "class": "not a UGL token"}
 
 
+def encode(text):
+    """English -> UGL lines, with UGL's own parser (the same code as `ugl encode`)."""
+    lines = U.encode(text)
+    return json.dumps({"ugl": lines, "unknown": sorted({w for w, _ in U.encoder.unknown})})
+
+
 def analyze(text):
     """UGL text (one sentence per line) -> per-sentence tokens, gloss, English, ids."""
     tok = U.tokenizer
