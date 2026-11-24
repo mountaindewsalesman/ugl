@@ -126,6 +126,43 @@ def fetch_pyodide(version, out_dir, packages=("numpy",)):
     return sorted(seen)
 
 
+def _hash(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:10]
+
+
+def version_assets(out, manifest, pv):
+    """Cache-busting: every file the page loads gets a content-hashed URL, so a
+    browser can never mix a new page with an old cached worker/glue/bundle.
+    Only manifest.json and gallery.json keep fixed names (fetched no-store)."""
+    # the Pyodide runtime lives under its version: pyodide/<version>/
+    src, dst = os.path.join(out, "pyodide"), os.path.join(out, "pyodide-tmp")
+    os.rename(src, dst)
+    os.makedirs(src)
+    os.rename(dst, os.path.join(src, pv))
+    manifest["pyodide"]["path"] = f"pyodide/{pv}/"
+
+    def rewrite(name, pairs):
+        p = os.path.join(out, name)
+        s = open(p, encoding="utf-8").read()
+        for a, b in pairs:
+            if a not in s:
+                sys.exit(f"version_assets: {a!r} not found in {name}")
+            s = s.replace(a, b)
+        open(p, "w", encoding="utf-8").write(s)
+
+    manifest["bundle"] = f"ugl-py.zip?v={_hash(os.path.join(out, 'ugl-py.zip'))}"
+    manifest["glue"] = f"playground.py?v={_hash(os.path.join(out, 'playground.py'))}"
+    rewrite("worker.js", [('from "./pyodide/pyodide.mjs"', f'from "./pyodide/{pv}/pyodide.mjs"')])
+    rewrite("app.js", [('new Worker("worker.js"', f'new Worker("worker.js?v={_hash(os.path.join(out, "worker.js"))}"')])
+    rewrite("index.html", [('href="style.css"', f'href="style.css?v={_hash(os.path.join(out, "style.css"))}"'),
+                           ('src="app.js"', f'src="app.js?v={_hash(os.path.join(out, "app.js"))}"')])
+
+
 def encode_gallery(sentences):
     u = ugl.UGL(wsd=False)      # most-frequent-sense: the browser has no BERT sense model
     items = []
@@ -246,6 +283,7 @@ def main(argv=None):
         "commit": commit,
         "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
+    version_assets(out, manifest, pv)
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
     print(f"built {out}  ({len(items)} gallery entries, model {model})")

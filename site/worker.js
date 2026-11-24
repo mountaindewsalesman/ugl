@@ -39,11 +39,11 @@ async function fetchBytes(url, label, expected) {
 
 async function boot() {
   progress("Loading manifest");
-  const manifest = await (await fetch(here("manifest.json"))).json();
+  const manifest = await (await fetch(here("manifest.json"), { cache: "no-store" })).json();
 
   // Start the 10 MB download right away, in parallel with Pyodide itself.
   const bundle = fetchBytes(here(manifest.bundle), "Downloading UGL code + dictionary", manifest.bundle_bytes);
-  const glueSrc = fetch(here("playground.py")).then((r) => r.text());
+  const glueSrc = fetch(here(manifest.glue || "playground.py")).then((r) => r.text());
 
   progress("Starting Python (Pyodide " + PYODIDE_VERSION + ")");
   const py = await loadPyodide();

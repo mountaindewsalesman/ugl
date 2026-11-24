@@ -231,8 +231,8 @@ $("ugl").addEventListener("input", () => {
 
 async function init() {
   const [manifest, gallery] = await Promise.all([
-    fetch("manifest.json").then((r) => r.json()),
-    fetch("gallery.json").then((r) => r.json()),
+    fetch("manifest.json", { cache: "no-store" }).then((r) => r.json()),
+    fetch("gallery.json", { cache: "no-store" }).then((r) => r.json()),
   ]);
   state.manifest = manifest;
   state.gallery = gallery;
