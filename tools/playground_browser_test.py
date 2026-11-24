@@ -18,7 +18,7 @@ import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-UGL_IN = "n4 v2 n2344s #3"
+EN_FOR_UGL = "Someone has three apples."
 EXPECT_READ = "someone has apples three"
 EXPECT_BACK = "Someone has 3 apples."
 
@@ -68,8 +68,12 @@ def run(browser_name, url, timeout_ms):
             arg=len(gallery[0]["ugl"]), timeout=30000)
         page.wait_for_timeout(500)        # let any debounced input handler settle
         back = page.inner_text("#results .back")
-        # 2. type UGL -> live decode + readable view
-        page.fill("#ugl", UGL_IN)
+        # 2. type UGL -> live decode + readable view (UGL taken from the page's own
+        #    encoder, so the test holds for any dictionary version)
+        sys.path.insert(0, ROOT)
+        import ugl
+        ugl_in = ugl.load(wsd=False).encode(EN_FOR_UGL)[0]
+        page.fill("#ugl", ugl_in)
         page.wait_for_function(
             "(want) => [...document.querySelectorAll('#results .readable')].some(e => e.textContent.trim() === want)",
             arg=EXPECT_READ, timeout=30000)

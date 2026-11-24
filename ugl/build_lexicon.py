@@ -145,6 +145,12 @@ def sense_frequencies(counts):
         for p in WN_FOR_CLASS[c]:
             senses += wn.synsets(lemma, pos=p)
         senses = list(dict.fromkeys(senses))
+        # a lowercase corpus word ("north", "may") means a common sense, not a
+        # proper one ("North" the Union, "May" the month): WordNet's lookup is
+        # case-insensitive, so keep only senses that list the word in lowercase
+        key = lemma.replace(" ", "_")
+        common = [x for x in senses if any(l.name() == key for l in x.lemmas())]
+        senses = common or senses
         if not senses:
             continue
         weights = []
@@ -421,10 +427,14 @@ def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_n
                 continue
             ccls = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}[s.pos()]
             best = max(s.lemmas(), key=lambda l: (counts.get((l.name().lower().replace("_", " "), ccls), 0)
-                                                  + counts.get((l.name().lower(), ccls), 0), l.count(), -s.lemmas().index(l)))
+                                                  + counts.get((l.name().lower(), ccls), 0)
+                                                  + counts.get((l.name().replace("_", " "), "name"), 0),
+                                                  l.count(), -s.lemmas().index(l)))
             ids[tok] = {"sense": s.name(), "lemma": best.name().replace("_", " "),
                         "freq": round(freq[s.name()], 4), "gloss": s.definition()}
-            if best.name()[:1].isupper():
+            # a proper noun: WordNet lists it as an instance (Paris is an instance of
+            # a capital city), or every spelling is capitalized (January, Jan)
+            if s.instance_hypernyms() or all(re.sub(r"^the_", "", l.name())[:1].isupper() for l in s.lemmas()):
                 ids[tok]["proper"] = True
 
     def resolve(exp):
