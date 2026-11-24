@@ -98,6 +98,8 @@ clause  := np V adv* [np] (clause \V)*      core:  subject verb adverbs object c
          | R clause \R clause \R            R relation/logic: R(A = landmark, B = event)
          | np                               bare noun phrase
 np      := head mod*                        modifiers FOLLOW their head
+         | L np \L np \L                     coordinated noun phrase, L = v4 (and) / v5 (or);
+                                              as a possessor the y goes on L: v4y A \v4 B \v4
 mod     := a# | n#j | #num | v3 clause \v3 | possessor-np(y)   (possessor is always last)
 ```
 
@@ -123,6 +125,8 @@ Rules:
 8. **Clause complements** close with the verb that took them:
    `'Mary' v_say_p 'John' v_leave_p \v_say` = Mary said that John left.
    Infinitive complements restate the subject: `n1 v_want n1 v_eat \v_want`.
-9. **Coordinated noun phrases are distributed** over clauses (`v4`). The
-   collective reading ("John and Mary met") is lost; see the limitations in
-   the README.
+9. **Coordinated noun phrases are one group**: `v4 'John' \v4 'Mary' \v4 v_meet_p`
+   = John and Mary met. "and" over two bare noun phrases always means a
+   coordinated noun phrase (a group); followed by a verb, it is the subject.
+   Re-mentioning the group ("they") repeats it. Nothing is distributed, so
+   collective readings survive.

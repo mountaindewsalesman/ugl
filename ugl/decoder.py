@@ -27,6 +27,9 @@ except ImportError:  # pragma: no cover
     getInflection = None
 
 
+COORD_VERBS = {V["and"], V["or"]}          # these also coordinate noun phrases
+
+
 class ParseError(Exception):
     pass
 
@@ -57,6 +60,7 @@ class NP:
     nums: List[Tok] = field(default_factory=list)
     rels: List[object] = field(default_factory=list)
     poss: Optional["NP"] = None
+    members: List["NP"] = field(default_factory=list)    # coordinated NP: head is the and/or token
 
 
 @dataclass
@@ -120,7 +124,9 @@ class Parser:
         x = self.tokat(i)
         if x is None:
             return False
-        return (x.kind == "word" and x.cls in ("n", "nv")) or x.kind in ("num", "name") or (x.kind == "unk" and x.cls == "n")
+        return ((x.kind == "word" and x.cls in ("n", "nv")) or x.kind in ("num", "name")
+                or (x.kind == "unk" and x.cls == "n")
+                or (x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS))   # coordinated NP
 
     def is_verb(self, x):
         return x is not None and ((x.kind == "word" and x.cls == "v") or (x.kind == "unk" and x.cls == "v"))
@@ -134,13 +140,23 @@ class Parser:
         x = self.tokat(i)
         if x is None:
             raise ParseError(f"clause expected at {i}")
-        if x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS:
+        np = None
+        if x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
+            # "and" over two noun phrases is a coordinated noun phrase; followed
+            # by a verb it is the subject ("John and Mary met")
+            save = i
+            try:
+                np, i = self.coord_np(i)
+            except ParseError:
+                np, i = None, save
+        if np is None and x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS:
             a, i = self.clause(i + 1)
             i = self.expect_close(i, x.idx)
             b, i = self.clause(i)
             i = self.expect_close(i, x.idx)
             return Logic(x, a, b), i
-        np, i = self.np(i)
+        if np is None:
+            np, i = self.np(i)
         v = self.tokat(i)
         if self.is_verb(v):
             if v.kind == "word" and v.idx in WRAPPER_VERBS:
@@ -185,7 +201,18 @@ class Parser:
         x = self.tokat(i)
         return x is not None and x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS
 
+    def coord_np(self, i):
+        x = self.tokat(i)
+        a, i = self.np(i + 1)
+        i = self.expect_close(i, x.idx)
+        b, i = self.np(i)
+        i = self.expect_close(i, x.idx)
+        return NP(x, members=[a, b]), i
+
     def np(self, i):
+        x = self.tokat(i)
+        if x is not None and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
+            return self.coord_np(i)
         if not self.starts_np(i):
             raise ParseError(f"noun phrase expected at {i}: {self.peek(i)}")
         np = NP(parse_tok(self.t[i]))
@@ -204,6 +231,9 @@ class Parser:
                 np.rels.append(c)
             elif "y" in x.mods and x.cls in ("n", "nv"):
                 np.poss, i = self.np(i)
+                break
+            elif "y" in x.mods and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
+                np.poss, i = self.coord_np(i)              # v4y A \v4 B \v4 = of (A and B)
                 break
             else:
                 break
@@ -343,11 +373,23 @@ class Decoder:
         return w
 
     # -------------------------------------------------- noun phrases
+    def namelike(self, np):
+        """Possessor written with 's (John's, my, John and Mary's) rather than 'of'."""
+        if np.members:
+            return all(self.namelike(m) for m in np.members)
+        h = np.head
+        return h.kind == "name" or h.base in RESERVED_NOUN_BASES or self.lex.is_proper(h.raw)
+
     def matches(self, np, base):
         return base is not None and np is not None and np.head.base == base
 
     def np(self, np, ctx, case="subj"):
         h = np.head
+        if np.members:                                   # "John and Mary"
+            word = "or" if h.idx == V["or"] else "and"
+            parts = [self.np(m, ctx, case if case != "poss" else "obj") for m in np.members]
+            s = f" {word} ".join(parts)
+            return s + "'s" if case == "poss" else s
         if h.kind == "word" and h.cls == "n" and h.idx in RESERVED_NOUNS:
             key = pron_key(h.base, h.mods)
             if key in PRON and not ("x" in h.mods or "q" in h.mods) and not np.rels and not np.adjs:
@@ -385,8 +427,7 @@ class Decoder:
             elif "d" in h.mods or "e" in h.mods:            # "most of these wars"
                 dem = ("these" if plural else "this") if "d" in h.mods else ("those" if plural else "that")
                 det += (" " if quant == "all" else " of ") + dem
-        elif np.poss is not None and (np.poss.head.kind == "name" or np.poss.head.base in RESERVED_NOUN_BASES
-                                      or self.lex.is_proper(np.poss.head.raw)):
+        elif np.poss is not None and self.namelike(np.poss):
             det = self.np(np.poss, ctx, "poss")
         elif np.poss is not None:
             det = "the"
@@ -421,7 +462,7 @@ class Decoder:
         m = v.mods
         lemma = self.lemma(v) if not (v.kind == "word" and v.idx in RESERVED_VERBS) else RESERVED_VERBS[v.idx][0]
         sbase = subj.head.base if subj else ""
-        plural_subj = subj is not None and ("s" in subj.head.mods or sbase == "n2")
+        plural_subj = subj is not None and ("s" in subj.head.mods or sbase == "n2" or bool(subj.members))
         first_person = sbase == "n1" and "s" not in (subj.head.mods if subj else "")
         third_sg = not plural_subj and sbase not in ("n1", "n2")
         past = "p" in m

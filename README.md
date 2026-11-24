@@ -153,7 +153,8 @@ pieces.
 | dictionary 0.2.0, tokenizer scheme 1 (names spelled letter by letter) | 3.13 |
 | + frequent proper nouns are numbered nouns (dictionary 0.3.0) | 2.72 |
 | + one-id closing tags for relation verbs (scheme 2) | 2.48 |
-| + subword pieces for the remaining literals (dictionary 0.4.0) | **1.99** |
+| + subword pieces for the remaining literals (dictionary 0.4.0) | 1.99 |
+| + coordinated noun phrases stay one group (no distribution) | **1.96** |
 
 ## Choosing word meanings (optional, local)
 
@@ -195,14 +196,12 @@ Hugging Face; after that, everything is local.
 2. **The parser's mistakes become UGL's mistakes.** Lists, dates, headings and long sentences parse badly; some modifiers and phrases are
    silently dropped.
 3. **Pronoun resolution is a recency heuristic.** It can pick the wrong noun.
-4. **Distributed coordination.** "John and Mary met" becomes "John met and
-   Mary met".
-5. **Compounds use the first sense of each gloss word.** `baya`
+4. **Compounds use the first sense of each gloss word.** `baya`
    ("common Indian weaverbird") came out as *weaver* (the person). Review
    `compounds.tsv`.
-6. **The decoder's English is stilted** ("impact negatively a human health").
+5. **The decoder's English is stilted** ("impact negatively a human health").
    This is intended: the decoder is literal.
-7. **Countability isn't known**, so you get "a water".
-8. **Quantifier scope is always surface order**, and "some/any" are treated
+6. **Countability isn't known**, so you get "a water".
+7. **Quantifier scope is always surface order**, and "some/any" are treated
    as plain indefinites.
-9. **Hyphenated words** ("by-product") often come out as unknown literals.
+8. **Hyphenated words** ("by-product") often come out as unknown literals.

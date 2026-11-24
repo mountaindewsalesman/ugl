@@ -8,7 +8,7 @@ and the ordering rules of SPEC.md:
 import re
 
 from .core import V, add_mods, literal, tok
-from .ir import Entity, Event, refer
+from .ir import Entity, Event
 
 WORD = re.compile(r"^(nv|n|v|a)(\d+)([a-z]*)$")
 
@@ -34,8 +34,8 @@ class Serializer:
     def mention(self, e):
         """Bare re-mention of an entity (replaces pronouns): head only, definite."""
         e = e.root()
-        if e.kind == "coord":
-            return self.mention(e.members[0])
+        if e.kind == "coord":                            # "they" = the same group again
+            return self.coordinated([self.mention(m) for m in e.members], e.logic)
         if e.kind == "lex":
             head = self.word(e.lemma, "v" if e.cls == "nv" else "n", pos=e.pos)[0]
             m = WORD.match(head)
@@ -64,7 +64,7 @@ class Serializer:
         if e.ref is not None:
             return self.mention(e)
         if e.kind == "coord":
-            return self.np(e.members[0], quants)       # only reached for coordinated possessors etc.
+            return self.coordinated([self.np(m, quants) for m in e.members], e.logic)
         if e.kind == "pronoun":                          # unresolved and not handled by coref
             return ["n3t"]
         mods = ("s" if e.plural else "") + (e.det if (not e.quant or e.det in "de") else "") \
@@ -88,7 +88,7 @@ class Serializer:
         for r in e.restrictors:
             out += [tok("v", V["that"])] + self.clause(r) + [f"\\v{V['that']}"]
         if e.possessor is not None:
-            p = self.np(e.possessor, quants)
+            p = self.np(e.possessor, quants)       # possessor letter on its head (v4y for a group)
             out += [add_mods(p[0], "y")] + p[1:]
         if e.quant:
             quants.append((list(head), V[e.quant]))
@@ -143,24 +143,19 @@ class Serializer:
             out += self.clause(c) + [f"\\v{vid}"]
         return out
 
-    def distribute(self, ev, quants):
-        """Coordinated subject/object noun phrases: one core clause per member."""
-        def members(e):
-            if e is None:
-                return [None], "and"
-            r = e.root()
-            if r.kind != "coord" or not r.members:
-                return [e], "and"
-            # a re-mention of a coordination re-mentions each member
-            return ([refer(m) for m in r.members] if e.ref is not None else r.members), r.logic
-        subjs, ls = members(ev.subj)
-        objs, lo = members(ev.obj)
-        logic = ls if len(subjs) > 1 else lo
-        cores = [self.core(ev, s, o, quants) for s in subjs for o in objs]
-        out = cores[-1]
-        for c in reversed(cores[:-1]):
-            out = self.logic(logic, c, out)
+    @staticmethod
+    def coordinated(parts, logic="and"):
+        """Coordinated noun phrase: v4 A \\v4 B \\v4  (nested for 3+ members)."""
+        i = V["or"] if logic == "or" else V["and"]
+        out = parts[-1]
+        for p in reversed(parts[:-1]):
+            out = [tok("v", i)] + p + [f"\\v{i}"] + out + [f"\\v{i}"]
         return out
+
+    def distribute(self, ev, quants):
+        """The core clause.  Coordinated noun phrases stay one group (no
+        distribution), so collective readings survive: "John and Mary met"."""
+        return self.core(ev, ev.subj, ev.obj, quants)
 
     @staticmethod
     def logic(name, a, b):
