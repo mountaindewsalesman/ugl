@@ -58,10 +58,15 @@ def run(browser_name, url, timeout_ms):
             page.wait_for_function("(want) => document.getElementById('ugl').value.trim() === want",
                                    arg="\n".join(g["ugl"]), timeout=60000)
         print(f"  [{browser_name}] live-encoded {min(6, len(gallery))} typed sentences, identical to CPython")
-        page.fill("#en", "")
-        # 1. first example button -> results with READ and BACK rows
+        # 1. first example button -> its UGL, then READ and BACK rows for it
         page.click("#examples button >> nth=0")
-        page.wait_for_selector("#results .back", timeout=30000)
+        first = "\n".join(gallery[0]["ugl"])
+        page.wait_for_function("(want) => document.getElementById('ugl').value.trim() === want",
+                               arg=first, timeout=60000)
+        page.wait_for_function(
+            "(n) => document.querySelectorAll('#results .back').length === n",
+            arg=len(gallery[0]["ugl"]), timeout=30000)
+        page.wait_for_timeout(500)        # let any debounced input handler settle
         back = page.inner_text("#results .back")
         # 2. type UGL -> live decode + readable view
         page.fill("#ugl", UGL_IN)
