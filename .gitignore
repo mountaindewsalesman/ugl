@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# corpus and build outputs (regenerate with scripts/fetch_wikipedia.py and `ugl build-lexicon`)
+data/raw/
+data/build/
+data/lexicon.json
+data/lexicon.tsv
+data/compounds.tsv
+dictionary-export/
