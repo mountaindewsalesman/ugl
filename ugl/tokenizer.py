@@ -13,7 +13,7 @@ UTF-8 byte fallback.
 """
 import re
 
-from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, MOD_ORDER
+from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, MOD_ORDER, parse_literal
 
 SPECIALS = ["<pad>", "<bos>", "<eos>", "<unk>", "<sep>"]
 STRUCT = ["<close>", "<nv>", "<num>", "<name>", "<unk_n>", "<unk_v>", "<unk_a>", "</lit>"]
@@ -72,7 +72,8 @@ class Tokenizer:
             body, _, mods = t[1:].rpartition("'")
             return self._literal("<name>", body) + [self.id["+" + c] for c in mods]
         if len(t) > 2 and t[1] == "?":
-            return self._literal(f"<unk_{t[0]}>", t[2:])
+            _, cls, text, mods = parse_literal(t)
+            return self._literal(f"<unk_{cls}>", text.replace(" ", "_")) + [self.id["+" + c] for c in mods]
         return [self.unk]
 
     def encode(self, ugl, bos=False, eos=False):
@@ -100,7 +101,7 @@ class Tokenizer:
                 out.append(" ".join(line)); line = []
                 continue
             if t.startswith("+") and len(t) == 2 and line:
-                line[-1] += t[1]
+                line[-1] += t[1]          # modifiers follow words, names and n?'..' literals alike
                 continue
             if t == "<close>":
                 line.append("\\" + (v[ids[i]] if i < len(ids) else "")); i += 1
@@ -117,7 +118,7 @@ class Tokenizer:
                     i += 1
                 i += 1
                 s = buf.decode("utf-8", errors="replace")
-                line.append("#" + s if t == "<num>" else "'" + s + "'" if t == "<name>" else f"{t[5]}?{s}")
+                line.append("#" + s if t == "<num>" else "'" + s + "'" if t == "<name>" else f"{t[5]}?'{s}'")
                 continue
             line.append(t)
         if line:

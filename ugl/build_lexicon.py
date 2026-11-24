@@ -75,7 +75,16 @@ def count_corpus(nlp, files, limit_chars=None):
     t0 = time.time()
     with nlp.select_pipes(enable=["tok2vec", "tagger", "attribute_ruler", "lemmatizer"]):
         for i, doc in enumerate(nlp.pipe(texts(), batch_size=256)):
-            for t in doc:
+            run = []
+            for t in list(doc) + [None]:
+                if t is not None and t.pos_ == "PROPN" and (t.is_alpha or "-" in t.text):
+                    run.append(t.text)
+                    continue
+                if run:                                   # a maximal run of proper nouns = one name
+                    counts[(" ".join(run), "name")] += 1
+                    run = []
+                if t is None:
+                    break
                 c = UPOS_CLASS.get(t.pos_)
                 if c and t.is_alpha:
                     counts[(t.lemma_.lower(), c)] += 1
@@ -85,9 +94,53 @@ def count_corpus(nlp, files, limit_chars=None):
 
 
 # ------------------------------------------------------------------ step 2
+class NameSense:
+    """A frequent proper name that WordNet does not have: a noun meaning of its own."""
+    def __init__(self, text):
+        self.text = text
+
+    def name(self):
+        return "name:" + self.text
+
+    def pos(self):
+        return "n"
+
+    def definition(self):
+        return "proper name"
+
+
+def proper_sense(text):
+    """The WordNet meaning of a proper name, if WordNet has it as a proper noun."""
+    key = text.replace(" ", "_")
+    for s in wn.synsets(key, pos="n"):
+        if any(l.name() == key and l.name()[:1].isupper() for l in s.lemmas()):
+            return s
+    return None
+
+
+def name_senses(counts, freq, min_count, max_names):
+    """Frequent names -> senses.  Names WordNet knows (France, Aristotle) credit
+    their count to that meaning; the rest become NameSense primitives."""
+    names = sorted(((n, k[0]) for k, n in counts.items() if k[1] == "name" and n >= min_count), reverse=True)
+    index, extra = {}, []
+    for n, text in names[:max_names]:
+        s = proper_sense(text)
+        if s is not None:
+            freq[s.name()] += n
+            index[text] = s.name()
+        else:
+            ns = NameSense(text)
+            freq[ns.name()] += n
+            index[text] = ns.name()
+            extra.append(ns)
+    return index, extra
+
+
 def sense_frequencies(counts):
     freq = collections.defaultdict(float)
     for (lemma, c), n in counts.items():
+        if c == "name":
+            continue
         senses = []
         for p in WN_FOR_CLASS[c]:
             senses += wn.synsets(lemma, pos=p)
@@ -309,7 +362,7 @@ class Builder:
         log(f"  compounds from glosses: {n_comp}, connotation collapses: {n_coll}")
 
 
-def build(raw_dir, out_path, limit_chars=None, recount=False):
+def build(raw_dir, out_path, limit_chars=None, recount=False, min_name=20, max_names=30000):
     import spacy
     nlp = spacy.load("en_core_web_md")
     os.makedirs(DATA, exist_ok=True)
@@ -332,6 +385,9 @@ def build(raw_dir, out_path, limit_chars=None, recount=False):
 
     log("step 2: sense frequencies")
     freq = sense_frequencies(counts)
+    name_index, name_extra = name_senses(counts, freq, min_name, max_names)
+    log(f"  {len(name_index)} frequent names: {len(name_index) - len(name_extra)} already in WordNet, "
+        f"{len(name_extra)} new")
     order = sorted(wn.all_synsets(), key=lambda s: (-freq[s.name()], s.name()))
     order = list(dict.fromkeys(order))
 
@@ -345,6 +401,9 @@ def build(raw_dir, out_path, limit_chars=None, recount=False):
     log(f"  parsed in {time.time()-t0:.0f}s")
     b = Builder(nlp, freq)
     b.run(order, gloss_docs)
+    for ns in name_extra:                       # names are always primitives (no gloss to decompose)
+        b.decided[ns.name()] = [[ns.name(), "n", ""]]
+    order = sorted(order + name_extra, key=lambda s: (-freq[s.name()], s.name()))
 
     log("step 4: numbering primitives")
     next_id = dict(LEXICAL_START)
@@ -356,11 +415,17 @@ def build(raw_dir, out_path, limit_chars=None, recount=False):
             tok = f"{c}{next_id[c]}"
             next_id[c] += 1
             prim_id[s.name()] = tok
+            if isinstance(s, NameSense):
+                ids[tok] = {"sense": s.name(), "lemma": s.text, "freq": round(freq[s.name()], 4),
+                            "gloss": s.definition(), "proper": True}
+                continue
             ccls = {"n": "n", "v": "v", "a": "a", "s": "a", "r": "r"}[s.pos()]
             best = max(s.lemmas(), key=lambda l: (counts.get((l.name().lower().replace("_", " "), ccls), 0)
                                                   + counts.get((l.name().lower(), ccls), 0), l.count(), -s.lemmas().index(l)))
             ids[tok] = {"sense": s.name(), "lemma": best.name().replace("_", " "),
                         "freq": round(freq[s.name()], 4), "gloss": s.definition()}
+            if best.name()[:1].isupper():
+                ids[tok]["proper"] = True
 
     def resolve(exp):
         out = []
@@ -381,12 +446,27 @@ def build(raw_dir, out_path, limit_chars=None, recount=False):
             ss = [x.name() for x in wn.synsets(lemma, pos=p)]
             if ss:
                 index[key][lemma.replace("_", " ").lower()] = ss
-    person = wn.synset("person.n.01")
-    person_senses = sorted({x.name() for x in person.closure(lambda s: s.hyponyms())} | {person.name()})
+    def closure(*roots):
+        out = set()
+        for r in roots:
+            ss = wn.synset(r)
+            out |= {x.name() for x in ss.closure(lambda s: s.hyponyms() + s.instance_hyponyms())} | {ss.name()}
+        return sorted(out)
+    # semantic classes the encoder needs (e.g. "at nine" = time, "at home" = place)
+    classes = {
+        "person": closure("person.n.01"),
+        "time": closure("time_period.n.01", "time_unit.n.01", "calendar_month.n.01",
+                        "day_of_the_week.n.01", "time.n.05", "season.n.02", "point.n.06",
+                        "clock_time.n.01", "calendar_day.n.01"),
+        "place": closure("location.n.01", "structure.n.01", "geographic_point.n.01"),
+    }
+    person_senses = classes["person"]
 
     senses = {}
     for s in order:
         e = {"tokens": mapping[s.name()], "gloss": s.definition()}
+        if isinstance(s, NameSense):
+            e["name"] = s.text
         if s.name() in b.how:
             e["why"] = b.how[s.name()]
         senses[s.name()] = e
@@ -408,6 +488,8 @@ def build(raw_dir, out_path, limit_chars=None, recount=False):
         "senses": senses,
         "index": index,
         "person_senses": person_senses,
+        "classes": classes,
+        "names": name_index,          # exact proper name -> sense (format addition, v1-compatible)
     }
     write_dictionary(dictionary, out_path)
     export_tsv(dictionary, os.path.dirname(out_path))
@@ -445,8 +527,10 @@ def main(argv=None):
     ap.add_argument("--out", default=os.path.join(BUILD, "ugl-dict.json.gz"))
     ap.add_argument("--limit-chars", type=int, default=None, help="stop counting after N characters")
     ap.add_argument("--recount", action="store_true", help="ignore cached data/counts.json")
+    ap.add_argument("--min-name", type=int, default=20, help="corpus count for a name to get its own number")
+    ap.add_argument("--max-names", type=int, default=30000)
     a = ap.parse_args(argv)
-    build(a.raw, a.out, a.limit_chars, a.recount)
+    build(a.raw, a.out, a.limit_chars, a.recount, a.min_name, a.max_names)
 
 
 if __name__ == "__main__":

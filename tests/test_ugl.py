@@ -70,8 +70,16 @@ def test_tokenizer_roundtrip():
     for en, _ in CASES:
         u = enc(en)
         assert TOK.decode(TOK.encode(u)) == u
-    u = "'Céline_Arnauld'y #1,823 n?by-product n100st \\v9"
+    u = "'Céline_Arnauld'y #1,823 n?'by-product'j n100st \\v9"
     assert TOK.decode(TOK.encode(u)) == u
+
+
+def test_literals_take_modifiers():
+    from ugl.core import add_mods, literal, parse_literal
+    assert literal("unk", "DPR", "j") == "n?'DPR'j"
+    assert add_mods("n?'DPR'", "j") == "n?'DPR'j"
+    assert parse_literal("n?'by-product'j") == ("unk", "n", "by-product", "j")
+    assert parse_literal("n?blorft") == ("unk", "n", "blorft", "")      # old form still reads
 
 
 def test_parentheses_ignored():

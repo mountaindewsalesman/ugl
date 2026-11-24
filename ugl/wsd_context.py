@@ -84,8 +84,11 @@ class ContextWSD:
 
     def choose(self, lemma, cands, sent_and_index):
         sent, i = sent_and_index
-        words = [t.text for t in sent]
-        i = i - getattr(sent, "start", 0)
+        if isinstance(sent, (list, tuple)):     # plain word list (UGL parser)
+            words = list(sent)
+        else:                                   # spaCy span / doc
+            words = [t.text for t in sent]
+            i = i - getattr(sent, "start", 0)
         ctx = self.word_vectors(words)[i]
         best, best_s = None, -1e9
         for rank, s in enumerate(cands):

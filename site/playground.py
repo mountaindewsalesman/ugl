@@ -9,7 +9,7 @@ import json
 import ugl
 from ugl.__main__ import gloss_line
 from ugl.core import (ADJ_MODS, NOUN_MODS, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND,
-                      VERB_MODS, WORD_RE, tokenize)
+                      VERB_MODS, WORD_RE, parse_literal, tokenize)
 
 CLASS_NAMES = {"n": "noun", "v": "verb", "a": "adjective / adverb", "nv": "verb used as a noun"}
 MODS_FOR = {"n": NOUN_MODS, "nv": NOUN_MODS, "v": VERB_MODS, "a": ADJ_MODS, "name": NOUN_MODS}
@@ -77,8 +77,9 @@ def explain_token(t):
         return {"token": t, "kind": "name", "class": "name literal",
                 "lemma": body.replace("_", " "), "mods": _mods("name", mods)}
     if len(t) > 2 and t[1] == "?":
-        return {"token": t, "kind": "unk", "class": f"unknown {CLASS_NAMES.get(t[0], t[0])}",
-                "lemma": t[2:].replace("_", " ")}
+        _, cls, text, mods = parse_literal(t)
+        return {"token": t, "kind": "unk", "class": f"unknown {CLASS_NAMES.get(cls, cls)}",
+                "lemma": text, "mods": _mods(cls, mods)}
     return {"token": t, "kind": "bad", "class": "not a UGL token"}
 
 

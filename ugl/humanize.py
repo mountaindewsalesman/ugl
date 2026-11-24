@@ -8,7 +8,7 @@ Unlike decoding, nothing is reordered or dropped, so the structure (scopes,
 relation order, repeated nouns) stays visible.  It reuses the decoder's
 inflection so both agree on word forms.
 """
-from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE
+from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, parse_literal
 from .decoder import PRON, SPECIAL, Decoder, Tok, inflect, parse_tok
 
 NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -53,7 +53,7 @@ class Humanizer:
             name = self.dec.lemma(t)
             return name + ("'s" if "y" in t.mods else "")
         if t.kind == "unk":
-            return "?" + t.raw[2:].replace("_", " ")
+            return "?" + parse_literal(t.raw)[2]
         if t.cls == "a":
             return self.dec.adj(t)
         if t.cls == "v":

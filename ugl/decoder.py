@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .core import (WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
+from .core import (parse_literal, WORD_RE, RESERVED_NOUNS, RESERVED_VERBS, VERB_KIND, WRAPPER_VERBS,
                    CLAUSE_FORM_VERBS, V, tokenize)
 
 try:
@@ -97,7 +97,8 @@ def parse_tok(s):
         name, _, mods = s[1:].rpartition("'")
         return Tok(s, "name", "n", 0, mods)
     if len(s) > 2 and s[1] == "?":
-        return Tok(s, "unk", s[0], 0, "")
+        _, cls, _, mods = parse_literal(s)
+        return Tok(s, "unk", cls, 0, mods)
     raise ParseError(s)
 
 
@@ -170,6 +171,9 @@ class Parser:
                     i = save
                     if self.starts_np(i):
                         obj, i = self.np(i)
+                        if self.peek(i) == f"\\v{vid}":   # the NP was a bare complement
+                            comps.append(Bare(obj))
+                            obj, i = None, i + 1
             while self.starts_np(i) or self.clause_form_start(i):
                 c, i = self.clause(i)
                 i = self.expect_close(i, vid)
@@ -192,7 +196,7 @@ class Parser:
                 np.adjs.append(x); i += 1
             elif x.kind == "num":
                 np.nums.append(x); i += 1
-            elif "j" in x.mods and x.cls in ("n", "nv"):
+            elif "j" in x.mods and x.cls in ("n", "nv") or (x.kind == "name" and "j" in x.mods):
                 np.comps.append(NP(x)); i += 1
             elif x.kind == "word" and x.cls == "v" and x.idx == V["that"]:
                 c, i = self.clause(i + 1)
@@ -296,14 +300,21 @@ class Decoder:
         if t.kind == "num":
             return t.raw[1:].replace("_", " ")
         if t.kind == "unk":
-            return t.raw[2:].replace("_", " ")
+            return parse_literal(t.raw)[2]
         cls = "v" if t.cls == "nv" else t.cls
         return self.lex.lemma_of(cls, t.idx)
+
+    def is_adverb_sense(self, t):
+        """The dictionary meaning is itself an adverb (twice, often): no -ly."""
+        if t.kind != "word":
+            return False
+        e = self.lex.entry(t.raw)
+        return bool(e) and ".r." in e.get("sense", "")
 
     def adj(self, t, adverb=False):
         w = self.lemma(t)
         m = t.mods
-        if adverb:
+        if adverb and not self.is_adverb_sense(t):
             w = adverb_form(w)
         if "r" in m:
             f = inflect(w, "JJR") if not adverb else ""
@@ -348,7 +359,8 @@ class Decoder:
         quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
         if quant:
             det = quant
-        elif np.poss is not None and (np.poss.head.kind == "name" or np.poss.head.base in RESERVED_NOUN_BASES):
+        elif np.poss is not None and (np.poss.head.kind == "name" or np.poss.head.base in RESERVED_NOUN_BASES
+                                      or self.lex.is_proper(np.poss.head.raw)):
             det = self.np(np.poss, ctx, "poss")
         elif np.poss is not None:
             det = "the"
@@ -363,14 +375,14 @@ class Decoder:
             det = "those" if plural else "that"
         elif "t" in h.mods:
             det = "the"
-        elif h.kind == "word" and not plural and not nums:
+        elif h.kind == "word" and not plural and not nums and not self.lex.is_proper(h.raw):
             first = (pre[0] if pre else noun)
             det = "an" if VOWEL.match(first) else "a"
         words = [det] + nums + pre + [noun, of_part]
         for r in np.rels:
             sub = Ctx()
             sub.gap = h.base
-            sub.gap_word = "who" if self.lex.entry(h.raw) is None and h.kind == "name" else "that"
+            sub.gap_word = "who" if h.kind == "name" or self.lex.is_proper(h.raw) else "that"
             words.append(self.clause(r, sub))
         s = " ".join(w for w in words if w)
         if case == "poss":

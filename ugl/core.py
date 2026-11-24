@@ -8,7 +8,7 @@ Token shapes
     \\v57      closing tag for a clause opened by verb 57
     #9        number literal
     'Paris'   name literal (spaces become underscores)
-    n?word    unknown word literal of a class (n/v/a)
+    n?'word'j unknown-word literal of a class (n/v/a); takes modifiers like names
 """
 import re
 
@@ -120,7 +120,7 @@ MODAL_MODS = {"will": "f", "shall": "f", "would": "h", "can": "c", "could": "ch"
 TOKEN_RE = re.compile(r"""
     (?P<close>\\v\d+)
   | (?P<word>(?:nv|n|v|a)\d+[a-z]*)
-  | (?P<unk>[nva]\?[^\s]+)
+  | (?P<unk>[nva]\?(?:'[^'\s]+'[a-z]*|[^\s']+))   # n?'word'mods  (old form n?word read-only)
   | (?P<num>\#[^\s]+)
   | (?P<name>'[^'\s]+'[a-z]*)
 """, re.X)
@@ -144,10 +144,29 @@ def add_mods(token, mods):
     m = WORD_RE.match(token)
     if m:
         return tok(m.group(1), m.group(2), m.group(3) + mods)
+    if token.startswith("'") or (len(token) > 2 and token[1] == "?"):
+        kind, cls, text, old = parse_literal(token)
+        return literal(kind, text, old + mods, cls)
+    return token  # numbers take no modifiers
+
+
+def literal(kind, text, mods="", cls="n"):
+    """Spell a name or unknown-word literal: 'New_York'y, n?'blorft'j."""
+    body = re.sub(r"\s+", "_", text.strip()).replace("'", "")
+    q = f"'{body}'{canon_mods(mods)}"
+    return q if kind == "name" else f"{cls}?{q}"
+
+
+def parse_literal(token):
+    """-> (kind 'name'|'unk', cls, text, mods) for a name / unknown literal."""
     if token.startswith("'"):
-        base, _, old = token.rpartition("'")
-        return base + "'" + canon_mods(old + mods)
-    return token  # numbers / unknowns take no modifiers
+        body, _, mods = token[1:].rpartition("'")
+        return "name", "n", body.replace("_", " "), mods
+    cls, rest = token[0], token[2:]
+    if rest.startswith("'"):
+        body, _, mods = rest[1:].rpartition("'")
+        return "unk", cls, body.replace("_", " "), mods
+    return "unk", cls, rest.replace("_", " "), ""
 
 
 def tokenize(text):

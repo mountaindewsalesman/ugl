@@ -1,0 +1,518 @@
+"""Universal Dependencies tree -> Event/Entity graph (see ir.py).
+
+Input: one sentence as a list of token dicts
+    {form, upos, xpos, feats, head (1-based, 0 = root), deprel}
+as produced by ugl.parser (or read from a treebank).
+
+Each UD relation is handled in exactly one place:
+  clause level  nsubj nsubj:pass csubj expl aux aux:pass cop obj iobj obl* advcl
+                advmod ccomp xcomp mark conj cc parataxis
+  noun level    det amod nummod nmod nmod:poss compound flat appos acl acl:relcl case
+"""
+import re
+
+from .ir import Attr, Entity, Event, Rel, refer
+
+try:
+    from lemminflect import getLemma
+except ImportError:  # pragma: no cover
+    getLemma = None
+
+# ------------------------------------------------------------------ tables
+MODALS = {"will": "f", "shall": "f", "would": "h", "can": "c", "could": "ch", "may": "m",
+          "might": "mh", "must": "u", "should": "uh", "ought": "uh"}
+CLITIC_LEMMA = {"n't": "not", "'m": "be", "'re": "be", "'ve": "have", "'ll": "will", "wo": "will",
+                "ca": "can", "sha": "shall", "gon": "go", "na": "to", "ta": "to"}
+NUM_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen twenty".split())}
+NUM_WORDS.update({"thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+                  "ninety": 90, "hundred": 100, "thousand": 1000, "million": 10**6, "billion": 10**9})
+DEGREE = {"very": "w", "extremely": "w", "really": "w", "highly": "w", "so": "w", "too": "w",
+          "quite": "w", "more": "r", "most": "z", "less": "l", "least": "lz", "not": "x", "n't": "x"}
+QUANT = {"every": "all", "each": "all", "all": "all", "most": "most", "many": "many", "few": "few"}
+
+# preposition (case + fixed words) -> relation name
+PREP = {
+    "at": "at", "in": "in", "inside": "in", "within": "in", "into": "to", "on": "on", "onto": "to",
+    "upon": "on", "under": "under", "below": "under", "beneath": "under", "underneath": "under",
+    "above": "above", "over": "above", "near": "near", "beside": "near", "next to": "near",
+    "by": "by", "between": "between", "among": "between", "amongst": "between", "around": "around",
+    "round": "around", "through": "through", "throughout": "through", "via": "through",
+    "across": "across", "along": "along", "behind": "behind", "from": "from", "to": "to",
+    "toward": "to", "towards": "to", "with": "with", "without": "with", "for": "for",
+    "about": "about", "regarding": "about", "concerning": "about", "like": "like", "unlike": "like",
+    "against": "against", "despite": "despite", "in spite of": "despite", "except": "except",
+    "except for": "except", "as": "as", "of": "of", "before": "before", "after": "after",
+    "during": "during", "until": "until", "till": "until", "since": "since",
+    "because of": "cause", "due to": "cause", "out of": "out of", "outside": "out of",
+    "in front of": "in front of", "according to": "from", "instead of": "except",
+    "per": "for", "than": "against", "beyond": "out of", "past": "after", "off": "from",
+    "up": "above", "down": "under", "out": "out of", "away from": "from", "upon": "on",
+}
+NEGATING = {"without", "unlike"}
+TIME_SENSITIVE = {"at", "in", "on"}        # become "time" when the landmark is a time
+# subordinator -> relation name (clause form)
+SUBORD = {"because": "cause", "since": "cause", "as": "cause", "so": "cause", "if": "if",
+          "unless": "if", "when": "time", "whenever": "time", "once": "after", "while": "during",
+          "before": "before", "after": "after", "until": "until", "till": "until",
+          "although": "but", "though": "but", "whereas": "but", "even though": "but",
+          "so that": "for", "in order to": "for", "to": "for", "that": "for", "where": "at",
+          "wherever": "at", "like": "like", "as if": "like", "than": "against", "whether": "if"}
+CC = {"and": "and", "or": "or", "but": "but", "nor": "or", "yet": "but", "&": "and", "plus": "and"}
+DEICTIC = {"here": ("n5", "d", "at"), "there": ("n5", "e", "at"), "now": ("n6", "d", "time"),
+           "then": ("n6", "e", "time"), "where": ("n5", "q", "at"), "when": ("n6", "q", "time"),
+           "why": ("n8", "q", "cause"), "how": ("n7", "q", "with")}
+TIME_NOUN_ADV = {"today", "yesterday", "tomorrow", "tonight", "recently", "earlier", "later",
+                 "soon", "ago"}
+CLAUSE_DEPS = {"nsubj", "nsubj:pass", "csubj", "csubj:pass", "expl", "aux", "aux:pass", "cop",
+               "obj", "iobj", "obl", "obl:tmod", "obl:npmod", "obl:agent", "advcl", "ccomp",
+               "xcomp", "mark", "parataxis", "discourse", "vocative", "dislocated", "advmod",
+               "compound:prt", "conj", "cc"}
+
+
+class Tok:
+    __slots__ = ("i", "form", "lower", "lemma", "upos", "xpos", "feats", "head", "deprel", "kids")
+
+    def __init__(self, i, d):
+        self.i, self.form, self.lower = i, d["form"], d["form"].lower()
+        self.upos, self.xpos, self.deprel = d["upos"], d["xpos"], d["deprel"]
+        self.feats = dict(kv.split("=", 1) for kv in d["feats"].split("|") if "=" in kv)
+        self.head = d["head"] - 1          # -1 = root
+        self.kids = []
+        self.lemma = d.get("lemma") or None
+
+    def f(self, k):
+        return self.feats.get(k)
+
+    def dep(self, *names):
+        return [k for k in self.kids if k.deprel in names]
+
+    def dep1(self, *names):
+        d = self.dep(*names)
+        return d[0] if d else None
+
+    def __repr__(self):
+        return f"{self.form}/{self.upos}/{self.deprel}"
+
+
+def lemmatize(t, toks):
+    if t.lemma:
+        return t.lemma
+    w = t.lower
+    if w in CLITIC_LEMMA:
+        return CLITIC_LEMMA[w]
+    if w in ("'s", "’s") and t.upos == "AUX":
+        head = toks[t.head] if t.head >= 0 else None
+        return "have" if head is not None and head.xpos == "VBN" and t.deprel == "aux" else "be"
+    if w in ("'d", "’d"):
+        head = toks[t.head] if t.head >= 0 else None
+        return "have" if head is not None and head.xpos == "VBN" else "would"
+    if t.upos == "PROPN":
+        return t.form
+    if getLemma and t.upos in ("NOUN", "VERB", "ADJ", "ADV", "AUX"):
+        r = getLemma(t.form if t.upos != "NOUN" or not t.form.isupper() else t.form, upos=t.upos)
+        if r:
+            return r[0].lower()
+    return w
+
+
+def build_tokens(sent):
+    toks = [Tok(i, d) for i, d in enumerate(sent)]
+    for t in toks:
+        if t.head >= 0:
+            toks[t.head].kids.append(t)
+    for t in toks:
+        t.lemma = lemmatize(t, toks)
+    return toks
+
+
+def number_literal(t):
+    w = t.lower.replace(",", "")
+    if w in NUM_WORDS:
+        return "#" + str(NUM_WORDS[w])
+    return "#" + t.form.replace(" ", "_")
+
+
+class Analyzer:
+    """lexicon is used only for semantic classes (person / time) and multiword lookup."""
+
+    def __init__(self, lexicon):
+        self.lex = lexicon
+
+    # =============================================================== entry
+    def sentence(self, sent, question=False):
+        self.toks = build_tokens(sent)
+        roots = [t for t in self.toks if t.head < 0]
+        if not roots:
+            return None
+        ev = self.clause(roots[0])
+        if question and not self._has_wh(ev):
+            ev.mods += "q"
+        return ev
+
+    def _has_wh(self, ev):
+        return any(t.lower in ("what", "who", "whom", "which", "where", "when", "why", "how")
+                   for t in self.toks)
+
+    # =============================================================== clause
+    def clause(self, v, inherit_subj=None):
+        """Build the Event headed by token v (a verb, or a nominal/adjectival predicate)."""
+        cop = v.dep1("cop")
+        ev = Event(pred="verb", lemma=v.lemma, pos=v.i)
+        passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass"))
+
+        # ---- predicate type
+        nominal = v.upos not in ("VERB", "AUX") or cop is not None
+        if nominal and cop is None and not v.dep("nsubj", "nsubj:pass", "csubj", "expl"):
+            # fragment ("The man who left.", a heading): just the noun phrase
+            ev.pred, ev.lemma = "exist", "be"
+            ev.subj = self.entity(v)
+            for k in v.dep("advcl"):
+                ev.rels.append(self.subordinate(k, ev))
+            return ev
+        if nominal:
+            ev.pred, ev.lemma, ev.pos = "be", "be", (cop.i if cop is not None else v.i)
+            if v.upos in ("ADJ", "ADV") or (v.upos == "VERB" and cop is not None):
+                ev.manner.append(self.attr(v))
+            elif v.dep("case") and cop is not None:
+                # "John is in the house": be + relation
+                ev.pred = "exist"
+                ev.rels.append(self.rel_from_case(v))
+            else:
+                ev.obj = self.entity(v)
+        elif v.lemma == "have" and not v.dep("xcomp", "ccomp"):
+            ev.pred, ev.lemma = "have", "have"
+        elif v.lemma == "be":
+            ev.pred = "be" if v.dep("obj", "attr") else "exist"
+        else:
+            prt = v.dep1("compound:prt")
+            if prt is not None and self.lex.senses(v.lemma + " " + prt.lower, "v"):
+                ev.lemma = v.lemma + " " + prt.lower
+
+        # ---- tense / aspect / mood / negation
+        ev.mods += self.verb_mods(v, cop, passive)
+
+        # ---- subject and object
+        subj = v.dep1("nsubj", "csubj", "expl")
+        psubj = v.dep1("nsubj:pass", "csubj:pass")
+        agent = next((o for o in v.dep("obl", "obl:agent")
+                      if any(c.lower == "by" for c in o.dep("case"))), None) if passive else None
+        if passive:
+            ev.obj = self.entity(psubj) if psubj is not None else ev.obj
+            ev.subj = self.entity(agent) if agent is not None else (inherit_subj and Entity("reserved", "n4")) or Entity("reserved", "n4")
+        elif subj is not None and subj.deprel == "expl":
+            ev.subj = None   # "there is X": X arrives as nsubj in UD, handled below
+            real = v.dep1("nsubj")
+            ev.subj = self.entity(real) if real is not None and real is not subj else Entity("reserved", "n3", det="t")
+        elif subj is not None and subj.deprel == "csubj":
+            ev.subj = Entity("reserved", "n3", det="t", restrictors=[self.clause(subj)])
+        elif subj is not None:
+            ev.subj = self.entity(subj)
+        elif inherit_subj is not None:
+            ev.subj = refer(inherit_subj)
+        elif "Imp" in (v.f("Mood") or "") or (v.head < 0 and v.xpos == "VB"):
+            ev.subj = Entity("reserved", "n2")
+            ev.mods += "o"
+        else:
+            ev.subj = Entity("reserved", "n3", det="t")
+        if ev.pred in ("verb", "have", "be") and not nominal:
+            o = v.dep1("obj")
+            if o is not None:
+                ev.obj = self.entity(o)
+        io = v.dep1("iobj")
+        if io is not None:
+            ev.rels.append(Rel("to", self.entity(io)))
+
+        # ---- adverbials, relations, subordinate clauses, complements
+        for k in v.kids:
+            d = k.deprel
+            if d == "advmod":
+                self.adverbial(k, ev)
+            elif d in ("obl", "obl:tmod", "obl:npmod", "obl:agent") and k is not agent:
+                ev.rels.append(self.rel_from_case(k))
+            elif d == "advcl":
+                ev.rels.append(self.subordinate(k, ev))
+            elif d in ("ccomp", "xcomp"):
+                ev.comps.append(self.complement(k, ev))
+        # ---- coordination
+        for k in v.dep("conj"):
+            if k.upos in ("VERB", "AUX", "ADJ") or k.dep("nsubj", "nsubj:pass", "cop"):
+                cc = k.dep1("cc")
+                ev.coord.append((CC.get(cc.lower if cc is not None else "and", "and"),
+                                 self.clause(k, inherit_subj=ev.subj)))
+        for k in v.dep("parataxis"):
+            if k.upos in ("VERB", "AUX") or k.dep("nsubj", "cop"):
+                ev.coord.append(("and", self.clause(k)))
+        return ev
+
+    def verb_mods(self, v, cop, passive):
+        m = ""
+        auxes = v.dep("aux", "aux:pass") + ([cop] if cop is not None else [])
+        finite = [v] + auxes
+        for a in v.dep("aux", "aux:pass"):
+            l = a.lemma
+            if l in MODALS:
+                m += MODALS[l]
+            elif l == "have" and v.xpos == "VBN":
+                m += "k"
+            elif l == "be" and v.xpos == "VBG" and a.deprel == "aux":
+                m += "g"
+        if any(a.lemma == "go" and v.xpos == "VB" for a in v.dep("aux")):
+            m += "f"
+        if any(t.f("Tense") == "Past" and (t.f("VerbForm") in (None, "Fin")) and t.xpos in ("VBD",)
+               for t in finite):
+            m += "p"
+        if any(k.lower in ("not", "n't", "never") for k in v.dep("advmod")):
+            m += "x"
+        return m
+
+    def adverbial(self, k, ev):
+        w = k.lower
+        if w in ("not", "n't", "never"):
+            return                                     # handled in verb_mods
+        if w in DEICTIC:
+            if k.head >= 0 and self.toks[k.head].deprel in ("advcl", "acl:relcl") and DEICTIC[w][1] == "q":
+                return                                 # subordinator ("when he left"), used by parent
+            tokn, mod, rel = DEICTIC[w]
+            ev.rels.append(Rel(rel, Entity("reserved", tokn + mod)))
+            return
+        if w in TIME_NOUN_ADV and self.lex.senses(w, "n"):
+            ev.rels.append(Rel("time", Entity("lex", w, pos=k.i)))
+            return
+        if w in ("also", "too", "just", "even", "only", "then", "so", "still", "already"):
+            return                                     # discourse particles: no content in UGL v0
+        ev.manner.append(self.attr(k))
+
+    def rel_from_case(self, k):
+        """obl / nmod with its case marker -> Rel(relation, landmark)."""
+        case = [c for c in k.dep("case") if c.upos in ("ADP", "SCONJ", "ADV", "PART")]
+        words = []
+        for c in case:
+            words.append(c.lower)
+            words += [f.lower for f in c.dep("fixed")]
+        prep = " ".join(words)
+        land = self.entity(k)
+        if not prep:
+            rel = "time" if k.deprel in ("obl:tmod", "nmod:tmod") or self.is_time(k, land) else "of"
+            return Rel(rel, land)
+        rel = PREP.get(prep) or PREP.get(words[0], "of")
+        if rel in TIME_SENSITIVE and self.is_time(k, land):
+            rel = "time"
+        return Rel(rel, land, neg=prep in NEGATING)
+
+    def is_time(self, k, ent):
+        if ent.kind == "num":
+            return True
+        if ent.kind == "lex":
+            return self.lex.in_class(ent.lemma, "time")
+        if ent.kind == "name":
+            return self.lex.in_class(ent.lemma.lower(), "time")
+        return False
+
+    def subordinate(self, k, main):
+        """advcl -> clause-form relation: Rel(name, Event)."""
+        marks = k.dep("mark")
+        words = []
+        for m in marks:
+            words.append(m.lower)
+            words += [f.lower for f in m.dep("fixed")]
+        if not words:
+            wh = next((a for a in k.dep("advmod") if a.lower in ("when", "where", "while", "whenever")), None)
+            if wh is not None:
+                words = [wh.lower]
+        key = " ".join(words)
+        rel = SUBORD.get(key) or (SUBORD.get(words[0]) if words else None) or "time"
+        sub = self.clause(k, inherit_subj=main.subj)
+        if key == "unless":
+            sub.mods += "x"
+        return Rel(rel, sub)
+
+    def complement(self, k, main):
+        if k.deprel == "xcomp":
+            ctrl = main.obj if main.obj is not None else main.subj
+            if k.upos in ("ADJ", "NOUN", "PROPN") and not k.dep("cop"):
+                # "made him happy", "seems happy", "elected him president"
+                e = Event(pred="be", lemma="be", subj=refer(ctrl) if ctrl else None)
+                if k.upos == "ADJ":
+                    e.manner.append(self.attr(k))
+                else:
+                    e.obj = self.entity(k)
+                return e
+            return self.clause(k, inherit_subj=ctrl)
+        return self.clause(k)
+
+    # =============================================================== nouns
+    def attr(self, t):
+        mods = ""
+        deg = t.f("Degree")
+        if deg == "Cmp":
+            mods += "r"
+        elif deg == "Sup":
+            mods += "z"
+        for a in t.dep("advmod"):
+            mods += DEGREE.get(a.lower, "")
+        lemma = t.lemma
+        if t.upos == "VERB":       # participle as adjective: try the surface form first
+            lemma = t.lower if self.lex.senses(t.lower, "a") else t.lemma
+        return Attr(lemma, "adj", mods, t.i)
+
+    def entity(self, t):
+        if t.upos == "PRON" or (t.upos == "DET" and t.deprel not in ("det",)):
+            return self.pronoun(t)
+        if t.upos == "NUM" or (t.xpos == "CD"):
+            e = Entity("num", number_literal(t), pos=t.i)
+            self.np_mods(t, e)
+            return e
+        if t.upos == "PROPN":
+            parts = [c for c in t.dep("flat", "compound") if c.upos == "PROPN"]
+            span = sorted(parts + [t], key=lambda x: x.i)
+            e = Entity("name", " ".join(x.form for x in span), pos=t.i, is_person=False)
+            self.np_mods(t, e, skip=set(id(p) for p in parts))
+            return e
+        e = Entity("lex", t.lemma, pos=t.i)
+        if t.xpos == "VBG" or t.upos == "VERB":
+            e.cls = "nv"
+        e.plural = t.f("Number") == "Plur"
+        # multiword noun ("ice cream") before treating compounds as attributes
+        comps = [c for c in t.dep("compound") if c.i < t.i and c.upos == "NOUN"]
+        skip = set()
+        if comps:
+            joined = " ".join([c.lemma for c in comps] + [t.lemma])
+            if self.lex.senses(joined, "n"):
+                e.lemma, skip = joined, set(id(c) for c in comps)
+        e.is_person = self.lex.in_class(e.lemma, "person")
+        self.np_mods(t, e, skip)
+        return e
+
+    def pronoun(self, t):
+        w, pt = t.lower, t.f("PronType")
+        person = t.f("Person")
+        plural = t.f("Number") == "Plur"
+        if pt == "Rel":
+            e = Entity("pronoun", w, pos=t.i)      # resolved to the relative clause head by the caller
+            e.person = 3
+            return e
+        if person == "1":
+            return Entity("reserved", "n1", plural=plural)
+        if person == "2":
+            return Entity("reserved", "n2")
+        if pt == "Int" or w in ("what", "who", "whom", "which"):
+            return Entity("reserved", "n4" if w in ("who", "whom") else "n3", question=True)
+        if pt == "Dem" or w in ("this", "that", "these", "those"):
+            return Entity("reserved", "n3", det="d" if w in ("this", "these") else "e", plural=w in ("these", "those"))
+        if w in ("something", "anything"):
+            return Entity("reserved", "n3")
+        if w in ("someone", "somebody", "anyone", "anybody"):
+            return Entity("reserved", "n4")
+        if w in ("nothing", "none"):
+            return Entity("reserved", "n3", neg=True)
+        if w in ("nobody", "noone", "no-one"):
+            return Entity("reserved", "n4", neg=True)
+        if w in ("everything", "everyone", "everybody", "all", "each"):
+            return Entity("reserved", "n4" if w.startswith("every") and w != "everything" else "n3", quant="all")
+        # third-person personal / possessive / reflexive: coreference decides
+        e = Entity("pronoun", w, pos=t.i, person=3, plural=plural, gender=t.f("Gender"))
+        return e
+
+    def np_mods(self, t, e, skip=()):
+        for c in t.kids:
+            if id(c) in skip:
+                continue
+            d = c.deprel
+            if d in ("det", "det:predet"):
+                w = c.lower
+                if w == "the":
+                    e.det = "t"
+                elif w in ("this", "these"):
+                    e.det = "d"
+                elif w in ("that", "those"):
+                    e.det = "e"
+                elif w == "no":
+                    e.neg = True
+                elif w in ("which", "what"):
+                    e.question = True
+                elif w in QUANT:
+                    e.quant = QUANT[w]
+                elif c.f("Poss") == "Yes" or c.upos == "PRON":
+                    e.possessor = self.pronoun(c)
+                elif w in ("another", "other"):
+                    e.attrs.append(Attr("other", "adj", "", c.i))
+            elif d == "amod":
+                if c.upos == "VERB" and not self.lex.senses(c.lower, "a"):
+                    e.restrictors.append(self.participle(c, e))
+                else:
+                    e.attrs.append(self.attr(c))
+            elif d == "nummod":
+                e.count = number_literal(c)
+            elif d == "compound":
+                if c.upos == "PROPN":
+                    e.attrs.append(Attr(c.form, "name", "", c.i))
+                elif c.upos == "NUM":
+                    e.attrs.append(Attr(number_literal(c), "num", "", c.i))
+                elif c.upos in ("NOUN", "ADJ", "X"):
+                    e.attrs.append(Attr(c.lemma, "noun" if c.upos != "ADJ" else "adj", "", c.i))
+            elif d == "nmod:poss":
+                e.possessor = self.entity(c)
+            elif d in ("nmod", "nmod:tmod", "nmod:npmod"):
+                r = self.rel_from_case(c)
+                if r.rel == "of":
+                    e.possessor = r.landmark
+                else:
+                    e.restrictors.append(Event(pred="exist", subj=refer(e), rels=[r]))
+            elif d == "appos":
+                e.restrictors.append(Event(pred="be", lemma="be", subj=refer(e), obj=self.entity(c)))
+            elif d == "acl:relcl":
+                e.restrictors.append(self.relative(c, e))
+            elif d == "acl":
+                e.restrictors.append(self.participle(c, e))
+            elif d == "conj" and c.upos in ("NOUN", "PROPN", "PRON", "NUM"):
+                pass   # collected by coordinate() below
+        conj = [c for c in t.dep("conj") if c.upos in ("NOUN", "PROPN", "PRON", "NUM") and not c.dep("cop", "nsubj")]
+        if conj:
+            members = [self.entity(c) for c in conj]
+            cc = next((g for c in conj for g in c.dep("cc")), None)
+            first = Entity(**{k: getattr(e, k) for k in e.__dataclass_fields__})
+            e.__init__("coord", members=[first] + members, logic=CC.get(cc.lower if cc else "and", "and"))
+
+    def relative(self, c, head):
+        """acl:relcl: the relative pronoun (or the gap) becomes a re-mention of head."""
+        relpron = [k for k in c.kids if k.f("PronType") == "Rel" or
+                   (k.lower in ("who", "whom", "which", "that") and k.deprel in ("nsubj", "obj", "nsubj:pass", "obl"))]
+        ev = self.clause(c)
+        ref = lambda: refer(head)
+
+        def fix(x):
+            return ref() if (x is not None and x.kind == "pronoun" and x.lemma in ("who", "whom", "which", "that")) else x
+        ev.subj, ev.obj = fix(ev.subj), fix(ev.obj)
+        for r in ev.rels:
+            if isinstance(r.landmark, Entity):
+                r.landmark = fix(r.landmark)
+        for r in ev.rels:      # "the place where I live": where -> at <head>
+            if isinstance(r.landmark, Entity) and r.landmark.kind == "reserved" and r.landmark.lemma in ("n5q", "n6q", "n8q", "n7q"):
+                r.landmark = ref()
+        if not relpron and not any(r for r in ev.rels if isinstance(r.landmark, Entity) and r.landmark.ref is head):
+            # "the book I read": gap in object position (or subject if none)
+            if ev.obj is None and ev.subj is not None and ev.subj.ref is not head and ev.pred == "verb":
+                ev.obj = ref()
+            elif ev.subj is None:
+                ev.subj = ref()
+        return ev
+
+    def participle(self, c, head):
+        """acl / participial amod: 'the man sitting there', 'particles released from rain'."""
+        ev = self.clause(c)
+        r = refer(head)
+        if c.xpos == "VBN":                       # passive participle: head is the object
+            if ev.obj is None:
+                ev.obj = r
+            if ev.subj is None or (ev.subj.kind == "reserved" and ev.subj.lemma == "n3"):
+                agent = next((rel for rel in ev.rels if rel.rel == "by"), None)
+                if agent is not None:
+                    ev.rels.remove(agent)
+                    ev.subj = agent.landmark
+                else:
+                    ev.subj = Entity("reserved", "n4")
+        else:
+            ev.subj = r
+        return ev

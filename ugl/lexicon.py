@@ -55,6 +55,8 @@ class Lexicon:
         self.senses_ = d["senses"]           # "dog.n.01" -> {"tokens","gloss","why"?}
         self.index = d["index"]              # class -> lemma -> [sense names]
         self.person = set(d["person_senses"])
+        self.classes = {k: set(v) for k, v in d.get("classes", {"person": d["person_senses"]}).items()}
+        self.names = d.get("names", {})      # exact proper name -> sense
         self.wsd = None                      # optional sense disambiguator (see ugl.wsd)
 
     # ------------------------------------------------------------ encode side
@@ -65,8 +67,28 @@ class Lexicon:
             out += [s for s in self.index[c].get(lemma, ()) if s in self.senses_]
         return list(dict.fromkeys(out))
 
+    def name_tokens(self, text, mods=""):
+        """Tokens for a frequent proper name, or None (then it stays a literal)."""
+        s = self.names.get(text)
+        if s is None and text.lower().startswith("the "):
+            s = self.names.get(text[4:])
+        if s is None or s not in self.senses_:
+            return None
+        toks = list(self.senses_[s]["tokens"])
+        toks[0] = add_mods(toks[0], mods)
+        return toks
+
+    def is_proper(self, token):
+        e = self.entry(token)
+        return bool(e) and e.get("proper", False)
+
     def gloss(self, sense):
         return self.senses_[sense]["gloss"]
+
+    def in_class(self, lemma, cls):
+        """Is the most frequent noun sense of lemma in semantic class cls (person/time/place)?"""
+        s = self.index["n"].get(lemma.lower())
+        return bool(s) and s[0] in self.classes.get(cls, ())
 
     def is_person(self, lemma):
         s = self.index["n"].get(lemma.lower())
