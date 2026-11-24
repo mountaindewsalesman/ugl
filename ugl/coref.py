@@ -108,8 +108,9 @@ def pick(p, role, sno, csubj, seen, topic=None):
     if w in REFLEXIVE and csubj is not None and csubj is not p:
         return csubj.root() if csubj.kind != "pronoun" else csubj
     recent = [s for s in seen if sno - s[2] <= WINDOW]
-    if w in PERSONAL:
-        ok = lambda e: (e.kind == "name" or e.is_person) and not e.plural and e.kind != "coord"
+    if w in PERSONAL:     # a name may be a person unless the dictionary knows it is not (Paris)
+        ok = lambda e: ((e.kind == "name" and e.animate is not False) or e.is_person) \
+            and not e.plural and e.kind != "coord"
     elif w in NEUTER:
         ok = lambda e: e.kind == "lex" and not e.is_person and not e.plural
     elif w in PLURAL or w in QUANTIFIER:
@@ -126,12 +127,12 @@ def pick(p, role, sno, csubj, seen, topic=None):
         # subject: "John saw him" -> him != John (that would be "himself")
         own = csubj.root()
         cands = [s for s in cands if s[0] is not own]
-    if not cands and w in NEUTER:          # "Paris ... it": allow names as a last resort
-        cands = [s for s in recent if s[0].kind == "name"]
+    if not cands and w in NEUTER:          # "Paris ... it": names known not to be people
+        cands = [s for s in recent if s[0].kind == "name" and s[0].animate is False]
     if not cands:
         # the document topic, under the same agreement rules (names fit he/she/it)
         if topic is not None and topic is not (csubj.root() if csubj is not None and role != "subj" else None) \
-                and (ok(topic) or (w in NEUTER and topic.kind == "name")):
+                and (ok(topic) or (w in NEUTER and topic.kind == "name" and topic.animate is not True)):
             return topic
         return None
     # salience: latest sentence first, then subjects, then latest mention

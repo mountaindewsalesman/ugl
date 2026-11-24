@@ -41,6 +41,7 @@ class Entity:
     person: Optional[int] = None    # pronouns: 1 2 3
     gender: Optional[str] = None
     is_person: bool = False
+    animate: Optional[bool] = None  # names: True person / False not a person / None unknown
     pos: Optional[int] = None
     senses: List[str] = field(default_factory=list)   # restrict the sense choice (unit symbols)
     parts: List[int] = field(default_factory=list)   # other token indices folded into this

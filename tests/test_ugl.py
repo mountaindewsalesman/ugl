@@ -275,3 +275,23 @@ def test_families_4():
         if not ok(u, e):
             fails.append(f"{en!r} -> {u!r} -> {e!r}")
     assert not fails, "\n".join(fails)
+
+
+FAMILIES_5 = [
+    # object + a second noun saying what it is: nothing dropped
+    ("He made a jelly that he dubbed styrol oxide.", lambda u, e: "oxide" in e),
+    ("We elected the woman president.", lambda u, e: "president" in e),
+    # "it" never means a person
+    ("Simon found that it had thickened.", lambda u, e: not e.startswith("Simon found that Simon")),
+    ("Paris is large. It has many museums.", lambda u, e: e.count("Paris") == 2),
+]
+
+
+def test_families_5():
+    fails = []
+    for en, ok in FAMILIES_5:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)

@@ -395,9 +395,16 @@ class Analyzer:
         else:
             ev.subj = Entity("reserved", "n4")
         if ev.pred in ("verb", "have", "be") and not nominal:
-            o = v.dep1("obj")
-            if o is not None:
-                ev.obj = self.entity(o)
+            objs = v.dep("obj")
+            if objs:
+                # a relative word ("that he dubbed ...") is the real object wherever it stands
+                first = next((o for o in objs if o.i in self.relheads), objs[0])
+                ev.obj = self.entity(first)
+                for o in objs:
+                    if o is not first:
+                        # "dubbed it styrol oxide", "elected him president": the second
+                        # noun says what the object is (or is called)
+                        ev.comps.append(Event(pred="be", lemma="be", subj=refer(ev.obj), obj=self.entity(o)))
         if loose_prt is not None:
             rel = PREP.get(loose_prt.lower)
             if rel and ev.obj is not None:                     # "sat on the bank": a relation over the object
@@ -706,7 +713,9 @@ class Analyzer:
             for p in [t] + parts:                # a capitalised adjective right before a name word: "United"
                 parts += [c for c in p.dep("amod") if c.form[:1].isupper() and c.i + 1 in idx and c not in parts]
             span = sorted(parts + [t], key=lambda x: x.i)
-            e = Entity("name", " ".join(x.form for x in span), pos=t.i, is_person=False,
+            text = " ".join(x.form for x in span)
+            known = self.lex.name_is_person(text)
+            e = Entity("name", text, pos=t.i, is_person=bool(known), animate=known,
                        parts=[x.i for x in span])
             self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e

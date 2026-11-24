@@ -93,6 +93,14 @@ class Lexicon:
         s = self.index["n"].get(lemma.lower())
         return bool(s) and s[0] in self.classes.get(cls, ())
 
+    def name_is_person(self, text):
+        """True / False when the dictionary knows whether this name is a person
+        ("Simon" yes, "Paris" no); None for names it does not know."""
+        s = self.names.get(text) or (self.names.get(text[4:]) if text.lower().startswith("the ") else None)
+        if s is None or s not in self.senses_:
+            return None
+        return s in self.person
+
     def is_person(self, lemma):
         s = self.index["n"].get(lemma.lower())
         return bool(s) and s[0] in self.person
