@@ -20,6 +20,12 @@ Everything runs locally. There is no cloud service and no large language
 model. The only neural parts are spaCy's small parser and word vectors
 (`en_core_web_md`).
 
+**Playground:** https://mountaindewsalesman.github.io/ugl/ decodes, tokenizes
+and explains UGL in the browser, running this repo's code in Pyodide. spaCy
+does not run in the browser, so English examples there are encoded when the
+site is built (`tools/build_playground.py`, deployed by
+`.github/workflows/pages.yml` on every push to `main`).
+
 ## Install
 
 From the repo folder:

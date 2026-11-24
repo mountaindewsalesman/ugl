@@ -1,0 +1,67 @@
+# Builds the browser playground from main and deploys it to GitHub Pages.
+# Repo settings: Pages -> Build and deployment -> Source = "GitHub Actions".
+name: playground
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ugl (with spaCy + en_core_web_md)
+        run: pip install .
+
+      - name: Build site (encodes the gallery with the real encoder)
+        run: python tools/build_playground.py --out _site
+
+      # Run the served site's worker.js under Node with the same Pyodide
+      # version the page uses, and check its output matches CPython.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Smoke-test the site in Pyodide
+        run: |
+          PYODIDE=$(sed -n 's/^const PYODIDE_VERSION = "\(.*\)";/\1/p' site/worker.js)
+          echo "Pyodide $PYODIDE"
+          mkdir -p "$RUNNER_TEMP/pyodide" && npm install --prefix "$RUNNER_TEMP/pyodide" "pyodide@$PYODIDE"
+          python -m http.server -d _site 8000 &
+          sleep 2
+          NODE_PATH="$RUNNER_TEMP/pyodide/node_modules" node tools/playground_smoke.js http://localhost:8000/ "$RUNNER_TEMP/smoke.json"
+          python tools/build_playground.py --out _site --compare "$RUNNER_TEMP/smoke.json"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
