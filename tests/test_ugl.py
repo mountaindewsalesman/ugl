@@ -80,7 +80,8 @@ def test_parentheses_ignored():
 
 def test_humanize():
     h = U.humanize
-    assert h(r"n4 v2 #3 n2344s \v2") == r"someone has three apples \has"
+    assert h("n4 v2 n2344s #3") == "someone has apples three"
+    assert U.decode("n4 v2 n2344s #3") == "Someone has 3 apples."
     assert h(r"#9 v20 n1 v444p n2344t \v20") == r"nine time I ate the apple \time"
     assert h("n136t v117p n1") == "the man saw me"
 

@@ -1,25 +1,25 @@
-// Smoke test for the playground: runs site/worker.js UNCHANGED under Node with
-// the real Pyodide (npm package, same version as the page), against a built
-// site served over HTTP, and decodes every gallery entry.
+// Smoke test for the playground: imports the built site's worker.js UNCHANGED
+// as an ES module under Node (exactly as a browser module worker does), so it
+// loads the site's own self-hosted pyodide/pyodide.mjs + runtime + numpy, then
+// decodes every gallery entry through the worker's message protocol.
 //
 //   python tools/build_playground.py
 //   python -m http.server -d _site 8000
-//   npm install pyodide@314.0.7        (in any folder; set NODE_PATH to it)
-//   node tools/playground_smoke.js http://localhost:8000/ smoke.json _site
+//   node tools/playground_smoke.mjs http://localhost:8000/ smoke.json _site
 //
 // smoke.json gets the Pyodide-side results; then
 //   python tools/build_playground.py --compare smoke.json
 // checks them against CPython running the same files.
-const fs = require("fs"), vm = require("vm"), path = require("path");
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 const [,, base, outPath = "playground-smoke.json", siteDir = "_site"] = process.argv;
-// Node's Pyodide loader reads files from disk: point it at the SAME runtime
-// files the site serves (siteDir/pyodide/), so those exact files are tested.
-const pyodideDir = path.resolve(siteDir, "pyodide") + path.sep;
-const { loadPyodide } = require("pyodide");
 const pending = new Map();
 let nextId = 1, readyRes, readyRej;
 const readyP = new Promise((r, j) => { readyRes = r; readyRej = j; });
-const self = {
+// what a worker sees as `self`; fetches go to the served site over HTTP
+globalThis.self = {
   location: { href: base + "worker.js" },
   postMessage(m) {
     if (m.type === "progress") {
@@ -29,20 +29,12 @@ const self = {
     else { console.log("message", JSON.stringify(m)); if (m.type === "error") readyRej(m); }
   },
 };
-const ctx = {
-  self, fetch, URL, console, Uint8Array, JSON, Number, String, Error, Promise, setTimeout,
-  // the page importScripts() its self-hosted pyodide.js; here the npm loader
-  // of the same version, reading the self-hosted runtime + numpy from disk
-  importScripts: () => { ctx.loadPyodide = (opts) => loadPyodide({ ...opts, indexURL: pyodideDir }); },
-};
-vm.createContext(ctx);
 (async () => {
-  const src = await (await fetch(base + "worker.js")).text();   // the served file
-  vm.runInContext(src, ctx, { filename: "worker.js" });
-  const ask = (text) => new Promise((res) => {
-    const id = nextId++; pending.set(id, res); ctx.self.onmessage({ data: { id, cmd: "analyze", text } });
-  });
   const t0 = Date.now();
+  await import(pathToFileURL(path.resolve(siteDir, "worker.js")).href);
+  const ask = (text) => new Promise((res) => {
+    const id = nextId++; pending.set(id, res); self.onmessage({ data: { id, cmd: "analyze", text } });
+  });
   await readyP;
   console.log("boot ms", Date.now() - t0);
   const gallery = await (await fetch(base + "gallery.json")).json();

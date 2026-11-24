@@ -34,21 +34,25 @@ jobs:
       - name: Build site (encodes the gallery with the real encoder)
         run: python tools/build_playground.py --out _site
 
-      # Run the served site's worker.js under Node with the same Pyodide
-      # version the page uses, and check its output matches CPython.
+      # Run the built worker.js under Node and check its output matches CPython.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Smoke-test the site in Pyodide
+        # imports the built worker.js as an ES module, exactly as the browser's
+        # module worker does, using the site's own self-hosted Pyodide files
         run: |
-          PYODIDE=$(sed -n 's/^const PYODIDE_VERSION = "\(.*\)";/\1/p' site/worker.js)
-          echo "Pyodide $PYODIDE"
-          mkdir -p "$RUNNER_TEMP/pyodide" && npm install --prefix "$RUNNER_TEMP/pyodide" "pyodide@$PYODIDE"
           python -m http.server -d _site 8000 &
           sleep 2
-          NODE_PATH="$RUNNER_TEMP/pyodide/node_modules" node tools/playground_smoke.js http://localhost:8000/ "$RUNNER_TEMP/smoke.json" _site
+          node tools/playground_smoke.mjs http://localhost:8000/ "$RUNNER_TEMP/smoke.json" _site
           python tools/build_playground.py --out _site --compare "$RUNNER_TEMP/smoke.json"
+
+      - name: Test the page in real browsers (Chromium + Firefox)
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium firefox
+          python tools/playground_browser_test.py --site _site
 
       - uses: actions/configure-pages@v5
 

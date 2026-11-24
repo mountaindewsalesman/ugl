@@ -3,7 +3,7 @@
     python tools/build_playground.py            # -> _site/
     python tools/build_playground.py --out DIR
     python -m http.server -d _site 8000         # then open http://localhost:8000
-    python tools/build_playground.py --compare smoke.json   # see tools/playground_smoke.js
+    python tools/build_playground.py --compare smoke.json   # see tools/playground_smoke.mjs
 
 What it produces:
   * the static files from site/
@@ -171,7 +171,7 @@ def check(out, items):
 
 
 def compare(out, smoke_path):
-    """Pyodide results (from tools/playground_smoke.js) == CPython results."""
+    """Pyodide results (from tools/playground_smoke.mjs) == CPython results."""
     with open(smoke_path, encoding="utf-8") as f:
         smoke = json.load(f)["gallery"]
     ref = site_results(out)
@@ -199,7 +199,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=os.path.join(ROOT, "_site"))
     ap.add_argument("--compare", metavar="SMOKE_JSON",
-                    help="don't build; compare playground_smoke.js output with CPython")
+                    help="don't build; compare playground_smoke.mjs output with CPython")
     a = ap.parse_args(argv)
     out = os.path.abspath(a.out)
     if a.compare:

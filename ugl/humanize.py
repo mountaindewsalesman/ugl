@@ -1,7 +1,8 @@
 """Readable view of UGL: the same tokens in the same order, each shown as an
 English word with its modifiers applied.
 
-    n4 v2 #3 n2344s #1 n5120 \\v2   ->   someone has three apples one pear \\has
+    n4 v2 n2344s #3        ->   someone has apples three
+    #9 v20 n1 v444p n2344t \\v20   ->   nine time I ate the apple \\time
 
 Unlike decoding, nothing is reordered or dropped, so the structure (scopes,
 relation order, repeated nouns) stays visible.  It reuses the decoder's

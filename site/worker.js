@@ -1,14 +1,17 @@
 // Runs the real ugl package in Pyodide, off the main thread.
+// This is a MODULE worker (new Worker(url, {type: "module"})): Pyodide 0.28+
+// only supports module workers and is loaded as an ES module.
 // Messages in:  {id, cmd: "analyze", text}
 // Messages out: {type: "progress", label, loaded?, total?}
 //               {type: "ready", info}
 //               {type: "result", id, data} | {type: "error", id?, message}
-const PYODIDE_VERSION = "314.0.7";
+//
 // Pyodide is served from this site (tools/build_playground.py downloads this
-// exact version into pyodide/), so nothing is loaded cross-origin.
-const PYODIDE_URL = new URL("pyodide/", self.location.href).href;
-importScripts(PYODIDE_URL + "pyodide.js");
+// exact version into pyodide/), so nothing is loaded cross-origin.  It finds
+// its runtime files next to pyodide.mjs on its own.
+import { loadPyodide } from "./pyodide/pyodide.mjs";
 
+const PYODIDE_VERSION = "314.0.7";
 const LIB = "/home/pyodide/lib";
 const here = (path) => new URL(path, self.location.href).href;
 const progress = (label, loaded, total) => self.postMessage({ type: "progress", label, loaded, total });
@@ -43,7 +46,7 @@ async function boot() {
   const glueSrc = fetch(here("playground.py")).then((r) => r.text());
 
   progress("Starting Python (Pyodide " + PYODIDE_VERSION + ")");
-  const py = await loadPyodide({ indexURL: PYODIDE_URL });
+  const py = await loadPyodide();
   progress("Installing numpy + lemminflect");
   await py.loadPackage(["numpy", ...manifest.wheels.map(here)], { messageCallback: () => {} });
 

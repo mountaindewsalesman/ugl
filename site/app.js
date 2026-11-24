@@ -29,7 +29,7 @@ const norm = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
 // ------------------------------------------------------------ worker
 const state = { gallery: [], manifest: null, ready: false, failed: false, seq: 0, shown: 0 };
-const worker = new Worker("worker.js");
+const worker = new Worker("worker.js", { type: "module" });
 const waiting = new Map();
 
 worker.onmessage = (ev) => {
