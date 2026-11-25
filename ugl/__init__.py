@@ -8,7 +8,7 @@
 
     u = ugl.load("ugl-dict-0.1.0.json.gz")     # pin an exact dictionary version
 """
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 from .core import WORD_RE
 from .lexicon import Lexicon, available

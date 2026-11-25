@@ -75,6 +75,7 @@ footer { color: var(--muted); font-size: .85rem; }
   <nav aria-label="Versions">
     <a href="#compare">At a glance</a>
     <a href="#next">In progress</a>
+    <a href="#v032">v0.3.2 · clean corpus</a>
     <a href="#v031">v0.3.1 · groups and prefixes</a>
     <a href="#v030">v0.3.0 · transformer parser</a>
     <a href="#v020">v0.2.0 · own parser</a>
@@ -106,8 +107,9 @@ footer { color: var(--muted); font-size: .85rem; }
 </section>
 
 <section id="next" class="version">
-  <div class="vhead"><h2>In progress · after v0.3.1</h2><span class="tag">training now</span></div>
-  <p>The browser keeps the small parser. A second, larger parser is being trained to run only when the clean training corpus is built: a sentence goes into the corpus only if both parsers agree on the parts that change its UGL.</p>
+  <div class="vhead"><h2>In progress · after v0.3.2</h2><span class="tag">corpus quality</span></div>
+  <p>The large parser finished and now builds the corpus (v0.3.2, below). The aim is to keep every sentence the parser is sure of: today the pipeline keeps about half of them on unseen Wikipedia text. The rest fail the round trip mostly where the decoder's English is ambiguous, or where a sentence uses a construction the analyzer does not handle yet. Next: keep fixing those families against <span class="mono">tools/roundtrip_report.py</span>, checked on held-out text and on hand-annotated trees (<span class="mono">tools/filter_value.py</span>), then build the paired UGL / English corpus for the two-model experiment.</p>
+  <p>The plan as it stood during training:</p>
   <div class="chart"><pre class="mermaid">
 flowchart LR
   A[English sentence] --> S[Small parser<br>ELECTRA-small, 14M<br>browser + corpus]
@@ -128,13 +130,66 @@ flowchart LR
   <div class="tablewrap"><table>
     <thead><tr><th>Step</th><th>Status</th><th>Why</th><th>How we will know it worked</th></tr></thead>
     <tbody>
-      <tr><td>Large parser (ELECTRA-base, 110M parameters) with the joint sense head</td><td>Training on the RTX 4060: 15 epochs on 5 UD English treebanks + SemCor, bf16</td><td>Two different-size models make different mistakes; where they agree, both are rarely wrong. A larger model is also more accurate on its own.</td><td>Dev LAS and sense accuracy above the small parser's 90.75 / 73.5%</td></tr>
-      <tr><td>Two-parser disagreement flag</td><td>Waiting on the large parser</td><td>Uncertain parses are the largest reason sentences are rejected; agreement is a second, independent check on top of calibrated confidence</td><td>The calibration table: how often kept sentences still hold a wrong head (today 2%), and how many more sentences are kept</td></tr>
-      <tr><td>Tree-level training loss (TreeCRF)</td><td>Only if still needed after the step above</td><td>Today each word picks its head on its own during training; a tree loss trains the probability of whole trees, so confidence matches what the decoder outputs</td><td>Better calibration and more clean sentences at the same error rate</td></tr>
+      <tr><td>Large parser (ELECTRA-base, 110M parameters) with the joint sense head</td><td class="win">Done: test LAS 92.7% (small: 90.8%), dev sense 69.3% (small: 65.4%); 206 MB, corpus only</td><td>Two different-size models make different mistakes; where they agree, both are rarely wrong. A larger model is also more accurate on its own.</td><td>Dev LAS and sense accuracy above the small parser's</td></tr>
+      <tr><td>Two-parser disagreement flag</td><td class="win">Done, now the corpus default: kept sentences with a wrong head 11% → 6% (EWT test)</td><td>Uncertain parses are the largest reason sentences are rejected; agreement is a second, independent check on top of calibrated confidence</td><td>The calibration table: how often kept sentences still hold a wrong head, and how many are kept</td></tr>
+      <tr><td>Tree-level training loss (TreeCRF)</td><td>On hold: the parser is no longer the bottleneck</td><td>Today each word picks its head on its own during training; a tree loss trains the probability of whole trees, so confidence matches what the decoder outputs</td><td>Better calibration and more clean sentences at the same error rate</td></tr>
       <tr><td>Resumable training</td><td>Done</td><td>The first large-parser run was killed when the computer ran low on memory and lost all progress</td><td>Checkpoints every 15 minutes, mid-epoch; a watchdog restarts a killed run from the last checkpoint</td></tr>
     </tbody>
   </table></div>
   <div class="note"><h3>Design questions</h3><p>All three were decided and built in v0.3.1 (below).</p></div>
+</section>
+
+<section id="v032" class="version">
+  <div class="vhead"><h2>v0.3.2 · clean corpus</h2><span class="tag">library 0.3.2</span><span class="tag">dictionary 0.6.0</span><span class="tag">tokenizer scheme 3</span></div>
+  <p>The corpus is now built with two parsers and a stricter, measured filter, and the encoder and decoder were fixed family by family until far more of the sentences the parser gets right survive the round trip. Two small additions to the language (SPEC rules 13 and 14) and number ranges came out of that work. The browser still uses the small parser.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart LR
+  A[English paragraph] --> B[Large parser<br>ELECTRA-base]
+  A --> S[Small parser<br>ELECTRA-small]
+  B --> C{Every head<br>at least 80% sure?}
+  S --> G{Both parsers give<br>the same UGL?}
+  C -- yes --> E[Analyzer · coref · serializer]
+  G -- yes --> E
+  E --> F{Any flag?<br>unknown word, dropped word,<br>fragment, unresolved pronoun}
+  F -- no --> R[Round trip<br>UGL → English → UGL]
+  R -- same reading --> K[(Clean corpus<br>UGL + English)]
+  C -- no --> X[Rejected]
+  G -- no --> X
+  F -- yes --> X
+  R -- changed --> X
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class B,S neural
+  class E,F rules
+  class C,G,R algo
+  class A,K,X data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Kind</th><th>What it does now</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td>Parsers</td><td class="kind neural">Neural</td><td>The large parser reads the text; the small one reads it again. A sentence needs every head at least 80% sure and both parsers to give the same UGL.</td><td>Kept sentences with a wrong head: 24% unfiltered, 11% confidence only, 6% both (EWT test)</td></tr>
+      <tr><td>Analyzer</td><td class="kind rules">Rules</td><td>A clause or "of" phrase after the last member of a group modifies the whole group; later members share the first one's "the"; number ranges and counted compounds keep their numbers; names keep every word</td><td>a writer and activist <em>who served</em> (both served); 40–60 days; a 2-year contract</td></tr>
+      <tr><td>Coreference</td><td class="kind rules">Rules</td><td>Gender agreement (from the noun, or learned from an earlier he / she), pronoun chains, possessors at any depth</td><td>"Her older brother installed it on her laptop": her = the singer, not the brother</td></tr>
+      <tr><td>Serializer</td><td class="kind rules">Rules</td><td>Canonical order for modifiers (adjectives, nouns, numbers) and for relations (number, then landmark): one UGL per meaning</td><td>"the 1902 plague epidemic" = "the plague epidemic of 1902"</td></tr>
+      <tr><td>Decoder</td><td class="kind algo">Algorithm</td><td>English that reads back the same: adverbs before the verb, "to …" / "-ing" after prepositions, phrases fronted where they would attach to the wrong word, comparatives, who / whom, in / on for dates</td><td>"moved across India to establish shakhas" (was "moved for he establishes … across India")</td></tr>
+      <tr><td>Round trip</td><td class="kind algo">Algorithm</td><td>Decode, re-encode, compare. A concept read back as another sense of the same English word counts as the same reading: that choice belongs to the sense model, measured separately.</td><td>"scrapped" read back as another sense of "scrap"</td></tr>
+    </tbody>
+  </table></div>
+  <h3>What changed from v0.3.1, and why</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th>Why</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Two-parser corpus filter</td><td>One parser's confidence alone let 11% of kept sentences through with a wrong head</td><td>6% at confidence 0.8 plus agreement; filter measured against hand-annotated trees</td></tr>
+      <tr><td>Silent data loss closed</td><td>"RC1" lost its digit, "40–60" lost 60, "2-year" lost 2, "New Testament" lost "New": the coverage check assumed numbers became counts</td><td>Numbers are checked like every word; ranges, counted compounds, names with numbers are written in full</td></tr>
+      <tr><td>Double counting removed</td><td>"were not present" was stored as not-not, "is more beautiful" as more-more, "later" as more-later</td><td>One negation, one degree letter</td></tr>
+      <tr><td>Group modifiers (SPEC 13)</td><td>UD hangs a shared modifier on the first member, so "a writer and activist who served" said only the writer served</td><td>The modifier goes after the group's closing tag and is said of all of it</td></tr>
+      <tr><td>Canonical order (SPEC 14)</td><td>The same meaning came out as different UGL depending on English word order</td><td>One spelling per meaning; round trips stop failing on order alone</td></tr>
+      <tr><td>Coreference agreement</td><td>"she" could pick "her brother"; "his" inside "the years of his life" was never resolved</td><td>Gender, chains, any depth</td></tr>
+      <tr><td>Decoder English</td><td>Ambiguous or ungrammatical English made correct UGL fail the round trip, throwing away good data</td><td>Wikipedia sentences kept: 9.6% → 14.8% on held-out text (12.5% → 19.0% on the text used for fixing); share of parser-sure sentences kept 32% → 49% held-out. Precision on hand-annotated trees unchanged (86.6% → 86.0% exactly right, 23.7% → 25.0% kept)</td></tr>
+    </tbody>
+  </table></div>
 </section>
 
 <section id="v031" class="version">
