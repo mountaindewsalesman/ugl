@@ -92,10 +92,11 @@ class UGL:
 
     def same_reading(self, a, b):
         """Do two encodings (lists of UGL lines) say the same thing as far as the
-        round trip can tell?  Token for token equal, except that two concepts
-        written with the same English word ("end" the part / "end" the
-        final stage) count as equal: the decoder said the right word, and which
-        of its senses it is was the sense model's choice, not the grammar's."""
+        round trip can tell?  Token for token equal, except where the decoder's
+        word for a concept can also mean the concept it was read back as ("end"
+        the part / "end" the final stage; "scrap" written for 'cancel', read as
+        'junk'): the decoder said the right word, and which of its senses it is
+        was the sense model's choice, not the grammar's."""
         ta, tb = " ".join(a).split(), " ".join(b).split()
         if len(ta) != len(tb):
             return False
@@ -106,7 +107,9 @@ class UGL:
             if not (mx and my) or mx.group(1) != my.group(1) or mx.group(3) != my.group(3):
                 return False
             cls = "v" if mx.group(1) == "nv" else mx.group(1)
-            if self.lexicon.lemma_of(cls, mx.group(2)) != self.lexicon.lemma_of(cls, my.group(2)):
+            word = self.lexicon.lemma_of(cls, mx.group(2))
+            meanings = {self.lexicon.senses_[s]["tokens"][0] for s in self.lexicon.senses(word, cls)}
+            if f"{cls}{my.group(2)}" not in meanings:
                 return False
         return True
 
