@@ -291,6 +291,47 @@ def parity_check(net, path, sents, voc, wp, n=60):
         raise SystemExit("numpy inference does not match the trained model")
 
 
+def wsd_pieces(exs, budget):
+    """Split sense examples [(piece ids, targets)] into parts that each need at most
+    `budget` distinct candidate glosses.  A word is scored only against its own
+    candidates, so the parts' losses (weighted by target count) add up exactly to
+    the whole batch's.  One sentence with many ambiguous words spans several parts."""
+    out, cur, seen = [], [], set()
+    for pid, tg in exs:
+        for t in tg:
+            new = set(t[1]) - seen
+            if cur and len(seen) + len(new) > budget:
+                out.append(cur)
+                cur, seen, new = [], set(), set(t[1])
+            if cur and cur[-1][0] is pid:
+                cur[-1][1].append(t)
+            else:
+                cur.append((pid, [t]))
+            seen |= new
+    if cur:
+        out.append(cur)
+    return out
+
+
+def batch_loss(net, b, amp):
+    """Parser loss of one batch: heads, labels, taggers."""
+    # bf16 mixed precision (--amp): same maths, about twice as fast for base-size encoders
+    with torch.autocast(DEVICE.type, dtype=torch.bfloat16, enabled=amp):
+        h, S, ld, lh = net(b)
+        m = b["mask"]
+        pad = torch.cat([torch.ones_like(m[:, :1]), m], 1)
+        Sm = S[:, 1:, :].float().masked_fill(~pad.unsqueeze(1), -1e9)
+        loss = F.cross_entropy(Sm[m], b["head"][m])
+        heads_full = torch.cat([torch.zeros_like(b["head"][:, :1]), b["head"]], 1)
+        L = net.label_scores(ld, lh, heads_full)[:, 1:].float()
+        loss = loss + F.cross_entropy(L[m], b["deprel"][m])
+        for k in ("upos", "xpos", "feats"):
+            gold = b[k][m]
+            if (gold != IGNORE).any():
+                loss = loss + F.cross_entropy(getattr(net, k)(h)[m].float(), gold, ignore_index=IGNORE)
+    return loss
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--epochs", type=int, default=12)
@@ -306,11 +347,18 @@ def main():
     ap.add_argument("--no-wsd", action="store_true")
     ap.add_argument("--amp", action="store_true", help="bf16 mixed precision on the GPU")
     ap.add_argument("--resume", action="store_true", help="continue from <out>.ckpt.pt after an interruption")
+    ap.add_argument("--wsd-glosses", type=int, default=64,
+                    help="most candidate glosses encoded in one forward pass (GPU memory)")
+    ap.add_argument("--gpu-mem", type=float, default=0.9,
+                    help="cap on the share of GPU memory PyTorch may use; past it a batch is split instead "
+                         "of the Windows driver spilling GPU memory into system RAM")
     ap.add_argument("--ckpt-min", type=float, default=15.0,
                     help="also checkpoint mid-epoch every this many minutes, so a killed run loses little")
     a = ap.parse_args()
     global DEVICE, MODEL
     DEVICE, MODEL = torch.device(a.device), a.model
+    if DEVICE.type == "cuda":
+        torch.cuda.set_per_process_memory_fraction(a.gpu_mem)
     torch.manual_seed(a.seed); random.seed(a.seed)
 
     from ugl.transformer import WordPiece
@@ -398,39 +446,61 @@ def main():
             first, tot_loss = 0, 0.0
         W_ep = [W_train[i] for i in wperm]
         for step in range(first, len(batches)):
-            b = batchify([E_train[i] for i in batches[step]])
-            # bf16 mixed precision (--amp): same maths, about twice as fast for base-size encoders
-            with torch.autocast(DEVICE.type, dtype=torch.bfloat16, enabled=a.amp):
-                h, S, ld, lh = net(b)
-                m = b["mask"]
-                pad = torch.cat([torch.ones_like(m[:, :1]), m], 1)
-                Sm = S[:, 1:, :].float().masked_fill(~pad.unsqueeze(1), -1e9)
-                loss = F.cross_entropy(Sm[m], b["head"][m])
-                heads_full = torch.cat([torch.zeros_like(b["head"][:, :1]), b["head"]], 1)
-                L = net.label_scores(ld, lh, heads_full)[:, 1:].float()
-                loss = loss + F.cross_entropy(L[m], b["deprel"][m])
-                for k in ("upos", "xpos", "feats"):
-                    gold = b[k][m]
-                    if (gold != IGNORE).any():
-                        loss = loss + F.cross_entropy(getattr(net, k)(h)[m].float(), gold, ignore_index=IGNORE)
-                if W_ep:                        # one sense batch per parser batch, same optimizer step
-                    k0 = (step * a.wsd_bs) % len(W_ep)
-                    w = wsd_batch(W_ep[k0:k0 + a.wsd_bs] or W_ep[: a.wsd_bs], lex, wp)
-                    loss = loss + F.cross_entropy(net.wsd_logits(w).float(), w["gold"])
-            opt.zero_grad()
-            loss.backward()
+            sents = [E_train[i] for i in batches[step]]
+            wex = []
+            if W_ep:                            # one sense batch per parser batch, same optimizer step
+                k0 = (step * a.wsd_bs) % len(W_ep)
+                wex = W_ep[k0:k0 + a.wsd_bs] or W_ep[: a.wsd_bs]
+            n_targets = sum(len(tg) for _, tg in wex)
+            # A batch that does not fit in GPU memory is split into pieces whose gradients
+            # add up to the same step: each piece's loss is weighted by its share of the
+            # batch (sense candidates are per word, so splitting senses is exact too).
+            # Memory is capped (--gpu-mem), so overflowing raises instead of the driver
+            # spilling into system RAM; the batch is then retried in more pieces.
+            pieces = 1
+            while True:
+                try:
+                    opt.zero_grad()
+                    loss_sum = 0.0
+                    ps = (len(sents) + pieces - 1) // pieces
+                    for pi in range(0, len(sents), ps):
+                        chunk = sents[pi:pi + ps]
+                        loss = batch_loss(net, batchify(chunk), a.amp) * (len(chunk) / len(sents))
+                        loss.backward()
+                        loss_sum += loss.item()
+                        del loss
+                    # every candidate gloss is encoded with gradients, so the sense work
+                    # goes in pieces of at most --wsd-glosses glosses
+                    for part in wsd_pieces(wex, max(4, a.wsd_glosses // pieces)):
+                        nt = sum(len(tg) for _, tg in part)
+                        w = wsd_batch(part, lex, wp)
+                        with torch.autocast(DEVICE.type, dtype=torch.bfloat16, enabled=a.amp):
+                            loss = F.cross_entropy(net.wsd_logits(w).float(), w["gold"]) * (nt / n_targets)
+                        loss.backward()
+                        loss_sum += loss.item()
+                        del loss, w
+                    break
+                except torch.cuda.OutOfMemoryError:
+                    loss = w = None
+                    opt.zero_grad(set_to_none=True)
+                    torch.cuda.empty_cache()
+                    if pieces >= max(len(sents), a.wsd_glosses):
+                        raise
+                    pieces *= 2
+                    print(f"  step {step}: out of GPU memory, retrying in {pieces} pieces", flush=True)
             nn.utils.clip_grad_norm_(net.parameters(), 5.0)
             opt.step()
             sched.step()
-            tot_loss += loss.item()
+            tot_loss += loss_sum
             if time.time() - last_save > a.ckpt_min * 60 and step + 1 < len(batches):
                 save(ep, step=step + 1, batches=batches, wperm=wperm, tot_loss=tot_loss)
                 last_save = time.time()
                 print(f"  checkpoint: epoch {ep} step {step + 1}/{len(batches)}", flush=True)
+        train_peak = torch.cuda.max_memory_allocated() / 2**30 if DEVICE.type == "cuda" else 0
         up, ua, la = evaluate(net, E_dev)
         wa = wsd_eval(net, W_dev, lex, wp) if W_dev else 0.0
         print(f"epoch {ep:2}  loss {tot_loss/len(batches):.3f}  dev UPOS {up:.4f} UAS {ua:.4f} LAS {la:.4f}"
-              f"  sense {wa:.4f}  ({time.time()-t0:.0f}s)", flush=True)
+              f"  sense {wa:.4f}  ({time.time()-t0:.0f}s, peak GPU train {train_peak:.1f} GB, with eval {torch.cuda.max_memory_allocated() / 2**30 if DEVICE.type == 'cuda' else 0:.1f} GB)", flush=True)
         if la + wa > best:                  # both jobs count when picking the epoch
             best = la + wa
             best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
