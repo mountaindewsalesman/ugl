@@ -62,7 +62,11 @@ def build_bundle(path):
                 if name.endswith(".py"):
                     full = os.path.join(dirpath, name)
                     z.write(full, "ugl/" + os.path.relpath(full, pkg).replace(os.sep, "/"))
-        for f in (PARSER, SENSES):                     # .npz: already compressed
+        # the sense head's precomputed gloss table (tools/build_gloss_table.py);
+        # without it every new word costs a transformer pass per candidate sense
+        import glob
+        tables = glob.glob(os.path.splitext(PARSER)[0] + ".glosses-*.npz")
+        for f in [PARSER, SENSES] + tables:            # .npz: already compressed
             if os.path.exists(f):
                 z.write(f, "ugl/" + os.path.relpath(f, pkg).replace(os.sep, "/"),
                         compress_type=zipfile.ZIP_STORED)

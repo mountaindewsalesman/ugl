@@ -9,13 +9,42 @@ lands nearest wins, nudged by the frequency prior:
     score(sense) = ctx . gloss(sense) - prior_weight * log(rank + 1)
 
 Every sense has a gloss, so senses never seen in training still compete.
-Gloss vectors are computed on first use and cached.
+
+Gloss vectors depend only on the (frozen) dictionary and parser, so they are
+computed once by tools/build_gloss_table.py and shipped next to the parser
+weights (8-bit, one scale per row): choosing a sense is then one dot product
+per candidate.  Without a matching table they are computed on first use (one
+transformer pass per gloss: ~1 s per sentence in the browser instead of ~10).
 """
+import json
 import math
+import os
 
 import numpy as np
 
 MAX_GLOSS_PIECES = 64
+
+
+def table_path(parser_path, dict_version):
+    return os.path.splitext(parser_path)[0] + f".glosses-{dict_version}.npz"
+
+
+def table_meta(parser_path, dict_version):
+    """What a table must match: the dictionary version and the exact parser file."""
+    return {"dictionary": dict_version, "parser": os.path.basename(parser_path),
+            "parser_bytes": os.path.getsize(parser_path)}
+
+
+def load_table(parser_path, dict_version):
+    """sense -> row, int8 rows, row scales; None when no matching table exists."""
+    path = table_path(parser_path, dict_version)
+    if not os.path.exists(path):
+        return None
+    z = np.load(path, allow_pickle=False)
+    if json.loads(str(z["meta"])) != table_meta(parser_path, dict_version):
+        return None                                   # stale: built for other weights
+    names = str(z["senses"]).split("\n")
+    return {s: i for i, s in enumerate(names)}, z["q"], z["scale"]
 
 
 def gloss_words(lexicon, sense):
@@ -32,6 +61,9 @@ class GlossWSD:
         self.mix = parser.w["wsd.mix"]
         self.prior_weight = prior_weight if prior_weight is not None else parser.meta.get("wsd_prior", 0.05)
         self._gloss = {}
+        self.table = None
+        if getattr(parser, "path", None) and os.path.exists(parser.path) and getattr(lexicon, "version", None):
+            self.table = load_table(parser.path, lexicon.version)
 
     def _lin(self, name, x):
         return x @ self.p.w[name + ".weight"].T + self.p.w[name + ".bias"]
@@ -43,12 +75,17 @@ class GlossWSD:
     def gloss_vec(self, sense):
         v = self._gloss.get(sense)
         if v is None:
-            ids, _ = self.p.wp.encode_words(gloss_words(self.lex, sense))
-            ids = ids[: MAX_GLOSS_PIECES - 1] + [ids[-1]]
-            hs = self.p.tf.hidden_states(ids)
-            v = self._lin("wsd_gloss", sum(m * h[0] for m, h in zip(self.mix, hs)))
+            row = self.table[0].get(sense) if self.table else None
+            v = (self.table[1][row].astype(np.float32) * self.table[2][row] if row is not None
+                 else self.compute_gloss_vec(sense))
             self._gloss[sense] = v
         return v
+
+    def compute_gloss_vec(self, sense):
+        ids, _ = self.p.wp.encode_words(gloss_words(self.lex, sense))
+        ids = ids[: MAX_GLOSS_PIECES - 1] + [ids[-1]]
+        hs = self.p.tf.hidden_states(ids)
+        return self._lin("wsd_gloss", sum(m * h[0] for m, h in zip(self.mix, hs)))
 
     def choose(self, lemma, cands, sent_and_index):
         sent, i = sent_and_index

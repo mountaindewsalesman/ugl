@@ -106,15 +106,28 @@ async function onEnglish() {
   if (!state.ready) { note.hidden = false; note.textContent = "Waiting for Python to load..."; return; }
   const mine = ++encodeSeq;
   note.hidden = false;
-  note.textContent = "Encoding...";
+  // a spinner with elapsed seconds: parsing runs on the CPU in WebAssembly and a
+  // long paragraph takes a few seconds, which should never look like a hang
+  const started = performance.now();
+  const tick = () => {
+    if (mine !== encodeSeq) return;
+    const s = Math.floor((performance.now() - started) / 1000);
+    note.textContent = s ? `Encoding... ${s} s` : "Encoding...";
+  };
+  note.classList.add("busy");
+  tick();
+  const timer = setInterval(tick, 500);
+  const done = () => { clearInterval(timer); if (mine === encodeSeq) note.classList.remove("busy"); };
   try {
     const { data } = await ask(text, "encode");
+    done();
     if (mine !== encodeSeq) return;            // a newer edit is on its way
     note.textContent = data.unknown.length ? `Not in the dictionary (kept as literals): ${data.unknown.join(", ")}` : "";
     note.hidden = !data.unknown.length;
     state.sources = data.ugl.map((l, i) => [l, data.sources[i], data.issues[i], data.spans[i]]);
     setUGL(data.ugl.join("\n"));
   } catch (err) {
+    done();
     if (mine === encodeSeq) { note.hidden = false; note.textContent = "Could not encode: " + (err.message || err); }
   }
 }
