@@ -119,11 +119,11 @@ def main():
     if a.second_parser and not a.single_parser and os.path.abspath(a.second_parser) != os.path.abspath(a.parser or DEFAULT_PATH):
         u.encoder.second_parser = ParserModel(a.second_parser)
     os.makedirs(a.out, exist_ok=True)
-    fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8")
-    fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")
-    fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8")
-    fp = open(os.path.join(a.out, "passages.jsonl"), "w", encoding="utf-8")
-    fs = open(os.path.join(a.out, "scores.txt"), "w", encoding="utf-8") if grader else None
+    fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8", buffering=1)
+    fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8", buffering=1)
+    fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8", buffering=1)
+    fp = open(os.path.join(a.out, "passages.jsonl"), "w", encoding="utf-8", buffering=1)
+    fs = open(os.path.join(a.out, "scores.txt"), "w", encoding="utf-8", buffering=1) if grader else None
     passages = kept = seen = 0
     why = collections.Counter()
 
