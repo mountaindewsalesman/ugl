@@ -61,6 +61,8 @@ class ParserModel:
             self.wp = WordPiece(meta["wordpiece"], meta.get("lowercase", True))
             self.tf = Transformer({k[3:]: v for k, v in self.w.items() if k.startswith("tf.")},
                                   t["layers"], t["heads"], t["eps"])
+            for k in [k for k in self.w if k.startswith("tf.")]:
+                del self.w[k]                    # held by self.tf only (it may move them to a GPU)
         else:
             self.layers = meta["lstm_layers"]
 

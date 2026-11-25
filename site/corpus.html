@@ -114,12 +114,12 @@ function render(s) {
   const tb = $("builds");
   tb.replaceChildren();
   const head = el("tr");
-  for (const h of ["Build", "Kept", "Read", "Kept %", "English words", "Progress", "Time left"]) head.append(el("th", null, h));
+  for (const h of ["Build", "On", "Kept", "Read", "Kept %", "English words", "Progress", "Time left"]) head.append(el("th", null, h));
   tb.append(head);
   for (const b of s.builds) {
     const tr = el("tr");
     const name = el("td"); const dot = el("span", "dot" + (b.running ? " on" : "")); name.append(dot, b.name);
-    tr.append(name, el("td", null, fmt(b.kept)), el("td", null, fmt(b.seen)),
+    tr.append(name, el("td", null, (b.device || "cpu").toUpperCase().replace("CUDA", "GPU")), el("td", null, fmt(b.kept)), el("td", null, fmt(b.seen)),
       el("td", null, (100 * b.kept / Math.max(1, b.seen)).toFixed(1) + "%"), el("td", null, fmt(b.english_words)),
       el("td", null, b.total ? (100 * b.seen / b.total).toFixed(1) + "%" : "–"),
       el("td", null, b.running ? hours(b.eta_hours) : "done"));

@@ -54,6 +54,7 @@ import json
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -81,6 +82,64 @@ def kind(issue):
 HARD = {"dropped content word", "fragment", "crash", "undecodable", "unattached word", "unknown preposition", "other"}
 
 
+def document_units(files):
+    """(source, title, paragraphs) per document; the source is the folder the
+    file sits in (scripts/fetch_sources.py).  A paragraph is kept when it ends
+    like a sentence or is long (short unpunctuated lines are headings):
+    '"Yes!" said Tom.' is a sentence, "Early life" is not."""
+    for path in files:
+        source = os.path.basename(os.path.dirname(os.path.abspath(path)))
+        for title, text in documents([path]):
+            paras = [p for p in paragraphs(text) if len(p) >= 40 or re.search(r"[.!?][\"'”’)]*$", p)]
+            if paras:
+                yield source, title, paras
+
+
+def _lines(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read().splitlines()
+
+
+def resume_point(out, units):
+    """(documents done, sentences read, kept, passages) of a stopped build.
+    From progress.json when the build wrote one; otherwise from the files: a
+    document's sentences are written only after the whole document is encoded,
+    so the document holding the last written sentence is the last one done.
+    Short sentences repeat across documents ("They were happy."), so of the
+    documents holding it, the one nearest the position implied by the number
+    of sentences read is taken."""
+    english = _lines(os.path.join(out, "english.txt"))
+    rejected = _lines(os.path.join(out, "rejected.tsv"))
+    passages = len(_lines(os.path.join(out, "passages.jsonl")))
+    seen, kept = len(english) + len(rejected), len(english)
+    prog = os.path.join(out, "progress.json")
+    if os.path.exists(prog):
+        with open(prog, encoding="utf-8") as f:
+            p = json.load(f)
+        return p["docs"], p["seen"], p["kept"], p["passages"]
+    if not seen:
+        return 0, 0, 0, 0
+    files = [(os.path.getmtime(os.path.join(out, n)), rows) for n, rows in
+             (("english.txt", english), ("rejected.tsv", rejected)) if rows]
+    last = max(files, key=lambda x: x[0])[1][-1].split("\t")[0]
+    norm = lambda x: re.sub(r"\s+", " ", x).strip()
+    last = norm(last)
+    from ugl.parser.tokenize import split_sentences
+    best, cum = None, 0
+    for i, (_, _, paras) in enumerate(units):
+        text = "\n".join(paras)
+        cum += len(split_sentences(text))
+        if last in norm(text) and (best is None or abs(cum - seen) < best[0]):
+            best = (abs(cum - seen), i)
+        if cum > seen * 1.1 + 2000:
+            break
+    if best is None:
+        raise SystemExit(f"cannot find where {out} stopped: no document holds {last!r}")
+    return best[1] + 1, seen, kept, passages
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
@@ -98,9 +157,16 @@ def main():
                     help="issue kinds to tolerate (default: 'unknown word'; pass --allow alone for none)")
     ap.add_argument("--grader", nargs="?", const="", default=None,
                     help="decide judgment calls with the quality grader (folder; default data/build/quality-grader)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue a stopped build in --out: append, starting after the last finished document")
+    ap.add_argument("--device", default=None,
+                    help="run the transformer passes on this torch device (e.g. cuda); default numpy on the CPU")
     ap.add_argument("--keep", type=float, default=0.4,
                     help="grader cut: the share of held-out test sentences it kept (0.4: 87%% right there)")
     a = ap.parse_args()
+    if a.device:
+        from ugl.transformer import use_device
+        use_device(a.device)
     u = ugl.UGL()
     grader = None
     if a.grader is not None:
@@ -119,31 +185,26 @@ def main():
     if a.second_parser and not a.single_parser and os.path.abspath(a.second_parser) != os.path.abspath(a.parser or DEFAULT_PATH):
         u.encoder.second_parser = ParserModel(a.second_parser)
     os.makedirs(a.out, exist_ok=True)
+    passages = kept = seen = done_docs = 0
+    if a.resume:
+        done_docs, seen, kept, passages = resume_point(a.out, document_units(a.files))
+        print(f"resuming after document {done_docs} ({seen} sentences read, {kept} kept)", file=sys.stderr)
     with open(os.path.join(a.out, "run.json"), "w", encoding="utf-8") as f:
-        # what this build reads (tools/corpus_monitor.py estimates time left from it)
+        # what this build reads; tools/corpus_monitor.py estimates time left from it
+        # (the rate counts from the last start or resume)
         json.dump({"files": [os.path.abspath(p) for p in a.files], "max_sents": a.max_sents,
-                   "started": __import__("time").time()}, f, indent=1)
-    fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8", buffering=1)
-    fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8", buffering=1)
-    fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8", buffering=1)
-    fp = open(os.path.join(a.out, "passages.jsonl"), "w", encoding="utf-8", buffering=1)
-    fs = open(os.path.join(a.out, "scores.txt"), "w", encoding="utf-8", buffering=1) if grader else None
-    passages = kept = seen = 0
+                   "started": time.time(), "seen_at_start": seen, "device": a.device}, f, indent=1)
+    mode = "a" if a.resume else "w"
+    fu = open(os.path.join(a.out, "ugl.txt"), mode, encoding="utf-8", buffering=1)
+    fe = open(os.path.join(a.out, "english.txt"), mode, encoding="utf-8", buffering=1)
+    fr = open(os.path.join(a.out, "rejected.tsv"), mode, encoding="utf-8", buffering=1)
+    fp = open(os.path.join(a.out, "passages.jsonl"), mode, encoding="utf-8", buffering=1)
+    fs = open(os.path.join(a.out, "scores.txt"), mode, encoding="utf-8", buffering=1) if grader else None
     why = collections.Counter()
 
-    def document_units():
-        """(source, title, paragraphs) per document; the source is the folder
-        the file sits in (scripts/fetch_sources.py).  A paragraph is kept when it
-        ends like a sentence or is long (short unpunctuated lines are headings);
-        '"Yes!" said Tom.' is a sentence, "Early life" is not."""
-        for path in a.files:
-            source = os.path.basename(os.path.dirname(os.path.abspath(path)))
-            for title, text in documents([path]):
-                paras = [p for p in paragraphs(text) if len(p) >= 40 or re.search(r"[.!?][\"'”’)]*$", p)]
-                if paras:
-                    yield source, title, paras
-
-    for source, title, paras in document_units():
+    for doc_no, (source, title, paras) in enumerate(document_units(a.files)):
+        if doc_no < done_docs:
+            continue
         # the whole document at once, so pronouns refer back across paragraphs
         # ("Lily went to the park.\nShe saw a dog."); every paragraph break ends a sentence
         text = "\n".join(paras)
@@ -209,6 +270,9 @@ def main():
                     p["scores"] = [round(x[2], 4) for x in r]
                 fp.write(json.dumps(p, ensure_ascii=False) + "\n")
                 passages += 1
+        # checkpoint: every document up to this one is fully written
+        with open(os.path.join(a.out, "progress.json"), "w", encoding="utf-8") as f:
+            json.dump({"docs": doc_no + 1, "seen": seen, "kept": kept, "passages": passages}, f)
         if a.max_sents and seen >= a.max_sents:
             break
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "

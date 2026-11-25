@@ -105,11 +105,13 @@ def snapshot(folder, u, history):
         started = run.get("started")
         last_write = max(os.path.getmtime(os.path.join(d, x)) for x in ("english.txt", "rejected.tsv"))
         running = now - last_write < 900 and (total is None or seen < total)
-        rate = seen / ((now - started) / 3600) if started and now > started else None   # sentences / hour
+        # sentences / hour since the build last started or resumed
+        done_here = seen - run.get("seen_at_start", 0)
+        rate = done_here / ((now - started) / 3600) if started and now > started and done_here > 0 else None
         eta = (total - seen) / rate if running and rate and total else None
         builds.append({"name": name, "kept": kept, "seen": seen, "english_words": en_words,
                        "ugl_tokens": ugl_tokens, "total": total, "running": running,
-                       "rate_per_hour": round(rate) if rate else None,
+                       "rate_per_hour": round(rate) if rate else None, "device": run.get("device") or "cpu",
                        "eta_hours": round(eta, 2) if eta is not None else None})
         for p in last_passages(os.path.join(d, "passages.jsonl"), 2):
             try:

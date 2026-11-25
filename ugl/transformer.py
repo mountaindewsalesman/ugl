@@ -115,17 +115,77 @@ def _ln(x, g, b, eps):
     return (x - m) / np.sqrt(v + eps) * g + b
 
 
+# Optional GPU for corpus building: use_device("cuda") runs every transformer
+# pass in PyTorch (float32, TF32 off, so results match the numpy path to float
+# rounding).  The default (None) is pure numpy: the browser never imports torch.
+DEVICE = None
+
+
+def use_device(device):
+    global DEVICE
+    DEVICE = device
+
+
 class Transformer:
     """w: dict of float32 arrays named by export_names() with prefix stripped."""
 
     def __init__(self, w, layers, heads, eps=1e-12):
         self.w, self.layers, self.heads, self.eps = w, layers, heads, eps
+        self._tw = None                     # the weights on DEVICE, made on first use
 
     def lin(self, name, x):
         return x @ self.w[name + ".weight"].T + self.w[name + ".bias"]
 
+    def _torch_weights(self):
+        if self._tw is None:
+            import torch
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            self._tw = {k: torch.from_numpy(np.ascontiguousarray(v, dtype=np.float32)).to(DEVICE)
+                        for k, v in self.w.items() if k.startswith(("embeddings", "L."))}
+            # the layers now live on the device; their numpy copies (most of the
+            # model) are not read again in this process
+            for k in [k for k in self.w if k.startswith("L.")]:
+                del self.w[k]
+        return self._tw
+
+    def _hidden_states_torch(self, ids):
+        """hidden_states() on DEVICE: the same computation, step for step."""
+        import torch
+        import torch.nn.functional as F
+        w, eps, H = self._torch_weights(), self.eps, self.heads
+        T = len(ids)
+        with torch.no_grad():
+            t = torch.tensor(ids, device=DEVICE)
+            x = (w["embeddings.word_embeddings.weight"][t] + w["embeddings.position_embeddings.weight"][:T]
+                 + w["embeddings.token_type_embeddings.weight"][0])
+            x = F.layer_norm(x, (x.shape[-1],), w["embeddings.LayerNorm.weight"], w["embeddings.LayerNorm.bias"], eps)
+            if "embeddings_project.weight" in w:
+                x = F.linear(x, w["embeddings_project.weight"], w["embeddings_project.bias"])
+            out = [x]
+            for l in range(self.layers):
+                p = f"L.{l}."
+                d = x.shape[1]
+
+                def lin(n, z):
+                    return F.linear(z, w[p + n + ".weight"], w[p + n + ".bias"])
+                q = lin("attention.self.query", x).view(T, H, d // H).transpose(0, 1)
+                k = lin("attention.self.key", x).view(T, H, d // H).transpose(0, 1)
+                v = lin("attention.self.value", x).view(T, H, d // H).transpose(0, 1)
+                s = (q @ k.transpose(1, 2) / math.sqrt(d // H)).softmax(-1)
+                ctx = (s @ v).transpose(0, 1).reshape(T, d)
+                x = F.layer_norm(lin("attention.output.dense", ctx) + x, (d,),
+                                 w[p + "attention.output.LayerNorm.weight"], w[p + "attention.output.LayerNorm.bias"], eps)
+                h = F.gelu(lin("intermediate.dense", x))
+                x = F.layer_norm(lin("output.dense", h) + x, (d,),
+                                 w[p + "output.LayerNorm.weight"], w[p + "output.LayerNorm.bias"], eps)
+                out.append(x)
+            return list(torch.stack(out).cpu().numpy())
+
     def hidden_states(self, ids):
         """ids: piece ids of one sequence -> list of (T, d) arrays, layer 0..L."""
+        if DEVICE is not None:
+            return self._hidden_states_torch(ids)
         w, eps = self.w, self.eps
         T = len(ids)
         x = (w["embeddings.word_embeddings.weight"][ids] + w["embeddings.position_embeddings.weight"][:T]
