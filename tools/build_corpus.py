@@ -126,10 +126,11 @@ def resume_point(out, units):
     last = max(files, key=lambda x: x[0])[1][-1].split("\t")[0]
     norm = lambda x: re.sub(r"\s+", " ", x).strip()
     last = norm(last)
+    from ugl.encoder import strip_asides
     from ugl.parser.tokenize import split_sentences
     best, cum = None, 0
     for i, (_, _, paras) in enumerate(units):
-        text = "\n".join(paras)
+        text = strip_asides("\n".join(paras))      # as the encoder reads it (no parentheses)
         cum += len(split_sentences(text))
         if last in norm(text) and (best is None or abs(cum - seen) < best[0]):
             best = (abs(cum - seen), i)

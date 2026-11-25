@@ -151,6 +151,11 @@ def main():
     a = ap.parse_args()
     import ugl
     u = ugl.UGL(wsd=False)
+    if os.name == "nt":
+        # while the monitor runs, Windows must not sleep (ES_CONTINUOUS |
+        # ES_SYSTEM_REQUIRED); released automatically when this process ends
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
     ensure_worktree()
     history = []
     old = os.path.join(WORKTREE, "stats.json")
