@@ -39,6 +39,7 @@ KIND = [("uncertain grammar", "uncertain parse"), ("refers to nothing", "unresol
         ("not in the dictionary", "unknown word"), ("no clear grammatical role", "unattached word"),
         ("was dropped", "dropped content word"), ("parsers disagree", "parsers disagree"), ("round trip", "round trip unstable"),
         ("not in the relation table", "unknown preposition"), ("does not parse back", "undecodable"),
+        ("not a sentence", "fragment"),
         ("failed", "crash")]
 
 

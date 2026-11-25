@@ -89,7 +89,7 @@ class Serializer:
             head = toks
             e.head = toks[0]
         out = list(head)
-        for a in e.attrs:
+        for a in sorted(e.attrs, key=self.attr_rank):
             out += self.attr(a)
         if e.count:
             out.append(e.count)
@@ -102,6 +102,16 @@ class Serializer:
             quants.append((list(head), V[e.quant]))
         return out
 
+    @staticmethod
+    def attr_rank(a):
+        """Canonical modifier order: adjectives, then attribute nouns and names,
+        then numbers, which share the count's slot right after them ("the 1902
+        plague epidemic" = "the plague epidemic of 1902").  English order inside
+        a rank is kept (sorted is stable).  The decoder places each kind by its
+        own English rule, so this order is only notation."""
+        kinds = {x.kind for x in a.leaves()}
+        return 2 if kinds == {"num"} else 0 if kinds == {"adj"} else 1
+
     def attr(self, a):
         if a.kind == "coord":                  # "cell and car numbers": v4 n#j 4 n#j 4
             return self.coordinated([[t for x in member for t in self.attr(x)] for member in a.group], a.logic)
@@ -110,10 +120,22 @@ class Serializer:
             return [add_mods(t[0], "j")] + t[1:]
         if a.kind == "num":
             return [a.lemma]
+        # the parser's word class for a modifier is a guess ("bacterial" tagged as a
+        # compound noun, "nil" as an adjective); a word the dictionary has only in
+        # the other modifier class is that word, not an unknown literal
         if a.kind == "noun":
+            if self.known(a.lemma, "n") or not self.known(a.lemma, "a"):
+                t = self.word(a.lemma, "n", pos=a.pos)
+                return [add_mods(t[0], "j")] + t[1:]
+            return self.word(a.lemma, "a", a.mods, pos=a.pos)
+        cls = "r" if a.adverb else "a"
+        if not self.known(a.lemma, cls) and self.known(a.lemma, "n") and not a.adverb:
             t = self.word(a.lemma, "n", pos=a.pos)
-            return [add_mods(t[0], "j")] + t[1:]
-        return self.word(a.lemma, "r" if a.adverb else "a", a.mods, pos=a.pos)
+            return [add_mods(t[0], "j" + a.mods)] + t[1:]
+        return self.word(a.lemma, cls, a.mods, pos=a.pos)
+
+    def known(self, lemma, cls):
+        return bool(self.lex.senses(lemma, cls)) or self.lex.prefixed(lemma, cls) is not None
 
     # ------------------------------------------------------------- clauses
     @staticmethod
@@ -179,13 +201,20 @@ class Serializer:
             way = Entity("reserved", "n7", attrs=list(ev.manner))
             out = self.np(way, quants) + [tok("v", V["with"])] + out + [f"\\v{V['with']}"]
         # stacked relations all modify the same clause, so their order carries no
-        # meaning: a canonical order (by relation number) gives one UGL per meaning
-        for r in reversed(sorted(ev.rels, key=lambda r: V[r.rel])):
-            i = V[r.rel]
+        # meaning: a canonical order (relation number, then the landmark's tokens,
+        # so two "in" phrases are ordered too) gives one UGL per meaning
+        done = []
+        for r in ev.rels:
+            q = []
+            land = self.clause(r.landmark) if isinstance(r.landmark, Event) else self.np(r.landmark, q)
+            done.append((V[r.rel], land, r, q))
+        done.sort(key=lambda d: (d[0], d[1]))
+        for i, land, r, q in reversed(done):
+            quants += q
             if isinstance(r.landmark, Event):
-                out = [tok("v", i, "x" if r.neg else "")] + self.clause(r.landmark) + [f"\\v{i}"] + out + [f"\\v{i}"]
+                out = [tok("v", i, "x" if r.neg else "")] + land + [f"\\v{i}"] + out + [f"\\v{i}"]
             else:
-                out = self.np(r.landmark, quants) + [tok("v", i, "x" if r.neg else "")] + out + [f"\\v{i}"]
+                out = land + [tok("v", i, "x" if r.neg else "")] + out + [f"\\v{i}"]
         for restrictor, qid in reversed(quants):
             out = restrictor + [tok("v", qid)] + out + [f"\\v{qid}"]
         for name, other in ev.coord:

@@ -369,3 +369,75 @@ def test_modifier_groups_round_trip():
                "We waited two or three days.", "The anti-war protest grew."):
         a = U.encode(en)
         assert U.encode(U.decode("\n".join(a))) == a, (en, a, U.decode("\n".join(a)))
+
+
+# ---- round-trip families (tools/roundtrip_report.py on Wikipedia text)
+def lines(text, topic=None):
+    return U.encode_lines(text, topic=topic)
+
+
+def test_adverb_before_main_verb():
+    # between verb and object an adverb reads as part of the object: "bore frequently quotes"
+    e = U.decode("\n".join(U.encode("His letters often bore quotes from Tukaram.")))
+    assert re.search(r"often bore|frequently bore", e), e
+    e = U.decode("\n".join(U.encode("She will quickly finish the report.")))
+    assert re.search(r"will quickly \w+ the report", e), e
+    e = U.decode("\n".join(U.encode("He picked the box up.")))   # particles stay after the verb
+    assert not re.search(r"\bup pick", e), e
+
+
+def test_adverb_word_means_the_concept():
+    # "currently" is the adverb of 'present'; "presently" would read back as 'soon'
+    e = U.decode("\n".join(U.encode("Postiglioni currently plays for Beauvais Rugby Club.")))
+    assert "currently" in e, e
+
+
+def test_canonical_modifier_and_relation_order():
+    # one UGL per meaning, whatever the English order
+    a = U.encode("Both parents died in the 1902 plague epidemic.")
+    b = U.encode("Both parents died in the plague epidemic of 1902.")
+    assert a == b, (a, b)
+    a = U.encode("The tree grows in thickets in Brazil.")
+    b = U.encode("The tree grows in Brazil in thickets.")
+    assert a == b, (a, b)
+
+
+def test_reserved_noun_keeps_noun_modifiers():
+    # "all the Kuki tribals": the attribute noun / name on "things" must be written
+    e = DEC.decode("n3s a760 'Kuki'j v1 a344")
+    assert "Kuki" in e and "tribal" in e.lower(), e
+    assert DEC.decode(r"n4 v107p n3se v3 n3s v319p \v3").count("that that") == 0
+
+
+def test_pronoun_gender_and_chains():
+    ls = lines("Rina Sawayama is a singer. Her older brother installed Ableton on her laptop, "
+               "and she made her first track.", "Rina Sawayama")
+    body = " ".join(l.ugl for l in ls[1:])
+    assert "n390ty" not in body and "'Ableton'y" not in body, body     # not the brother's / Ableton's laptop
+    assert body.count("'Rina_Sawayama'") >= 3, body
+
+
+def test_nested_possessor_pronoun_resolves():
+    ls = lines("K. B. Hedgewar was a doctor. His health deteriorated in later years of his life.")
+    assert "n3ty" not in ls[1].ugl and ls[1].ugl.count("'K_B_Hedgewar'y") == 2, ls[1].ugl
+
+
+def test_one_spelling_per_name():
+    assert U.encode("K. B. Hedgewar was a doctor.") == U.encode("K B Hedgewar was a doctor.")
+
+
+def test_verbless_lines_are_flagged():
+    ls = lines("Pathétique Sonata – Ludwig van Beethoven")
+    assert any("not a sentence" in i for l in ls for i in l.issues), ls
+
+
+def test_calendar_prepositions():
+    assert DEC.decode(r"#2017 v20 'Ann' v154p \v20").startswith("In 2017") or " in 2017" in DEC.decode(r"#2017 v20 'Ann' v154p \v20")
+    assert " on 21 June 1940" in DEC.decode(r"#1940-06-21 v20 'Ann' v154p \v20") or \
+        DEC.decode(r"#1940-06-21 v20 'Ann' v154p \v20").startswith("On 21 June 1940")
+
+
+def test_same_reading_treats_homonyms_as_equal():
+    # n545 / n1188 are both written "end": the round trip cannot tell them apart
+    assert U.same_reading(["n545t v1 a5"], ["n1188t v1 a5"])
+    assert not U.same_reading(["n545t v1 a5"], ["n545t v1p a5"])        # tense is grammar

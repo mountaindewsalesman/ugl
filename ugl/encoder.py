@@ -165,6 +165,10 @@ class Encoder:
         events, issues, toks = [], [], []
         for words, tree, question, _, state in parsed:
             found = self.uncertain(words, tree, question, state)
+            if not any(t["upos"] in ("VERB", "AUX") for t in tree):
+                # "Pathétique Sonata – Beethoven", "Lift Me Up - 5:52": the UGL would
+                # invent an "is"; such lines are not sentences to learn from
+                found.append("no verb: a title, caption or list item, not a sentence")
             try:
                 ev = self.analyzer.sentence(tree, question=question)
                 events.append(ev)

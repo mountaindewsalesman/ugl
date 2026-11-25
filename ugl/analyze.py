@@ -759,8 +759,9 @@ class Analyzer:
             if of is not None:
                 inner = self.entity(of)
                 inner.count = lit
+                inner.parts += [t.i] + [p.i for p in number_parts(t)]
                 return inner
-            return Entity("reserved", "n3", plural=True, count=lit, pos=t.i)
+            return Entity("reserved", "n3", plural=True, count=lit, pos=t.i, parts=[p.i for p in number_parts(t)])
         # a quantity word standing as a noun phrase by itself, whatever tag it got
         alone = (t.upos in ("ADJ", "ADV", "PRON", "DET", "NOUN") and t.deprel not in ("amod", "advmod", "det")
                  and not t.dep("nsubj", "cop", "det"))
@@ -916,6 +917,7 @@ class Analyzer:
                     e.attrs += group
                 else:
                     e.count = number_literal(c, number_parts(c))
+                    e.parts += [c.i] + [p.i for p in number_parts(c)]   # said: the coverage check sees it
             elif d == "compound":
                 if c.upos in ("PROPN", "NUM", "NOUN", "ADJ", "X"):   # "cell and car numbers"
                     e.attrs += self.modifiers(c, ("PROPN", "NUM", "NOUN", "ADJ", "X"), self.compound_attrs)

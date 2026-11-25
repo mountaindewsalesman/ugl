@@ -65,7 +65,5 @@ def missing(toks, ev):
             continue
         if t.upos == "PROPN" and t.deprel == "compound":           # inside a name
             continue
-        if t.upos == "NUM" and t.deprel in ("nummod", "compound"):  # became a count
-            continue
         out.append(t.form)
     return out

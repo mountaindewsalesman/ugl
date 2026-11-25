@@ -344,11 +344,22 @@ REL_WORD = {V["time"]: "at", V["cause"]: "because of", V["of"]: "of", V["by"]: "
             V["in front of"]: "in front of", V["out of"]: "out of"}
 QUANT_WORD = {V["all"]: "every", V["most"]: "most", V["many"]: "many", V["few"]: "few"}
 RESERVED_NOUN_BASES = {f"n{i}" for i in RESERVED_NOUNS}
+# one-word pronouns that take their adjectives after them ("something new", "nobody else")
+FUSED = {"something", "nothing", "someone", "nobody", "what", "who"}
+# adverbs that are verb particles ("pick it up", "go away"): they follow the verb
+# and its object; every other adverb goes before the main verb ("often bore quotes")
+PARTICLES = {"up", "down", "out", "off", "in", "on", "away", "back", "over", "around", "about",
+             "through", "along", "aside", "forward", "apart", "together", "home", "by", "behind"}
 VOWEL = re.compile(r"^[aeiou]", re.I)
 
 
 def inflect(lemma, tag):
     if " " in lemma:
+        if tag == "NNS" and " of " not in f" {lemma} ":
+            # a compound noun's plural is on its head, the last word: "love songs"
+            # ("cups of tea" keeps it on the first)
+            rest, last = lemma.rsplit(" ", 1)
+            return rest + " " + inflect(last, tag)
         first, rest = lemma.split(" ", 1)
         return inflect(first, tag) + " " + rest
     if getInflection:
@@ -428,7 +439,8 @@ class Decoder:
         w = self.lemma(t)
         m = t.mods
         if adverb and not self.is_adverb_sense(t):
-            w = adverb_form(w)
+            own = self.lex.surface(t.cls, t.idx, adverb=True) if t.kind == "word" else None
+            w = own or adverb_form(w)               # "currently", not "presently" from "present"
         if "r" in m:
             f = inflect(w, "JJR") if not adverb else ""
             w = f if f and f != w and " " not in w else "more " + w
@@ -504,13 +516,21 @@ class Decoder:
             if key in PRON and not ("x" in h.mods or "q" in h.mods) and not np.rels and not np.adjs:
                 p = PRON[key]
                 return p[0] if case == "subj" else p[1] if case == "obj" else p[2]
-            m = "".join(c for c in h.mods if c in "qxdets")
+            # table keys spell the letters in a fixed order (determiner, then s)
+            m = "".join(c for c in "qxdet" if c in h.mods) + ("s" if "s" in h.mods else "")
             word = SPECIAL.get((h.base, m)) or SPECIAL.get((h.base, m.replace("s", ""))) or RESERVED_NOUNS[h.idx]
             rq = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
             if rq:                                  # "many things", "all things"
                 word = ("all" if rq == "every" else rq) + " " + SPECIAL.get((h.base, "s"), word)
             nums = [self.count_text(n) for n in np.nums]
-            words = nums + [word] + [self.mod_text(a) for a in np.adjs]
+            mods = [self.mod_text(a) for a in np.adjs] + [self.mod_text(c) for c in np.comps]
+            if word.startswith(("the ", "all ", "many ", "most ", "few ")):   # "the tribal things"
+                det_, noun_ = word.rsplit(" ", 1)
+                words = [det_] + nums + mods + [noun_]
+            elif word in FUSED:                     # "something toxic": English puts them after
+                words = nums + [word] + mods
+            else:                                   # "tribal things", "these red ones"
+                words = nums + mods + [word]
             for r in np.rels:                       # "someone who can help"
                 sub = Ctx()
                 sub.gap = h.base
@@ -524,8 +544,8 @@ class Decoder:
         plural = "s" in h.mods
         if h.kind == "word" and h.cls == "nv":
             noun = inflect(noun, "VBG")
-        elif h.kind == "word" and plural:
-            noun = inflect(noun, "NNS")
+        elif plural and (h.kind == "word" or (h.kind == "unk" and h.cls == "n")):
+            noun = inflect(noun, "NNS")                  # also words outside the dictionary
         # an adverb in a counted phrase modifies the number: "about 100 degrees"
         noun = self.affix(h, noun)                   # "non-members"
         lead = [self.mod_text(a) for a in np.adjs if np.nums and self.is_adverb_sense(a)]
@@ -547,7 +567,11 @@ class Decoder:
                 det += (" " if quant == "all" else " of ") + dem
             elif "t" in h.mods:                             # "all the dogs", "most of the apples"
                 det += (" " if quant == "all" else " of ") + "the"
-        elif np.poss is not None and self.namelike(np.poss) and "t" in h.mods:
+        elif np.poss is not None and "t" in h.mods and np.poss.poss is None and not np.poss.rels \
+                and (self.namelike(np.poss) or np.rels):
+            # "Simon's book"; and "the audience's appreciation for X" whenever the noun
+            # has a phrase of its own after it, which "of the audience" would capture.
+            # A chain reads as "of": "the award of Brandenburg's state"
             det = self.np(np.poss, ctx, "poss")          # "Simon's book", "their numbers" (definite)
             poss_said = True
         elif "q" in h.mods:
@@ -718,6 +742,9 @@ class Decoder:
     def preposition(self, c):
         r = c.rel.idx
         prep = REL_WORD.get(r, RESERVED_VERBS[r][0])
+        if r == V["time"] and c.land.head.kind == "num" and re.fullmatch(r"#\d{3,4}(-\d\d)?(-\d\d)?", c.land.head.raw):
+            # calendar landmarks: "in 2017", "in June 1944", "on 21 June 1940"
+            prep = "on" if c.land.head.raw.count("-") == 2 else "in"
         if "x" in c.rel.mods:
             prep = {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
         return prep
@@ -765,9 +792,14 @@ class Decoder:
         if c.obj is not None and not obj_gap and not obj_wh:
             obj = self.np(c.obj, ctx, "obj")
         comps = [self.complement(x, c, ctx) for x in c.comps]
-        if copula and not advs and not obj and not comps:
-            pass
-        parts = before + [subj] + after + advs + [obj] + comps
+        late = advs
+        if not copula and after:
+            # English puts an adverb before the main verb ("his letters often bore
+            # quotes"); between verb and object it reads as part of the object
+            early = [w for w in advs if w not in PARTICLES]
+            late = [w for w in advs if w in PARTICLES]
+            after = after[:-1] + early + after[-1:]
+        parts = before + [subj] + after + late + [obj] + comps
         s = " ".join(p for p in parts if p)
         if obj_gap:
             s = f"{ctx.gap_word} {s}"

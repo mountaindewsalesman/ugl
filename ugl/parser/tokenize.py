@@ -12,6 +12,8 @@ ABBREV = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g",
 
 _TOKEN = re.compile(r"""
     (?:[A-Za-z]\.){2,}                    # U.S.  e.g.
+  | [^\W\d_]+\d[^\W_]*(?:-\d+)?          # letters then digits are one word: RC1  MP3  H2O
+  | [^\W\d_]+-\d+                        # COVID-19  B-52
   | \d+(?:[.,:]\d+)*(?:st|nd|rd|th|s)?    # 1,823  3.14  12:30  1990s  21st
   | [^\W\d_]+(?:[-'’][^\W\d_]+)*          # words, hyphenated words, o'clock
   | °[CFK](?![A-Za-z])|°                 # 100 °C: the unit is one word

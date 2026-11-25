@@ -187,6 +187,8 @@ def add_mods(token, mods):
 def literal(kind, text, mods="", cls="n"):
     """Spell a name or unknown-word literal: 'New_York'y, n?'blorft'j."""
     body = re.sub(r"\s+", "_", text.strip()).replace("'", "")
+    if kind == "name":            # one spelling per name: "K. B. Hedgewar" = "K B Hedgewar"
+        body = re.sub(r"(?<=[^\W\d_])\.", "", body)
     q = f"'{body}'{canon_mods(mods)}"
     return q if kind == "name" else f"{cls}?{q}"
 

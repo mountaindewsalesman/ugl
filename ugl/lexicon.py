@@ -68,6 +68,11 @@ class Lexicon:
         out = []
         for c in SEARCH[cls]:
             out += [s for s in self.index[c].get(lemma, ()) if s in self.senses_]
+        if not out and "-" in lemma:
+            # one word, three spellings: "long-standing" = "longstanding", "check-in" = "check in"
+            for variant in (lemma.replace("-", ""), lemma.replace("-", " ")):
+                for c in SEARCH[cls]:
+                    out += [s for s in self.index[c].get(variant, ()) if s in self.senses_]
         return list(dict.fromkeys(out))
 
     def name_tokens(self, text, mods=""):
@@ -164,6 +169,47 @@ class Lexicon:
             return RESERVED_VERBS[idx][0]
         e = self.ids.get(f"{cls}{idx}")
         return e["lemma"] if e else f"<{cls}{idx}?>"
+
+    def _first_sense_owners(self):
+        """(index class, token) -> [(number of senses, lemma)] for every lemma whose
+        most frequent common sense is that one token: the words that, read
+        without context, mean exactly this concept."""
+        if getattr(self, "_owners", None) is None:
+            own = {}
+            for c, lemmas in self.index.items():
+                for lemma, senses in lemmas.items():
+                    common = [s for s in senses if s in self.senses_
+                              and not self.is_proper(self.senses_[s]["tokens"][0])]
+                    if common and len(self.senses_[common[0]]["tokens"]) == 1:
+                        own.setdefault((c, self.senses_[common[0]]["tokens"][0]), []).append((len(common), lemma))
+            self._owners = own
+        return self._owners
+
+    @lru_cache(maxsize=None)
+    def surface(self, cls, idx, adverb=False):
+        """The English word to write for a concept: its own lemma when that word
+        mostly means it, else the least ambiguous word that does ("key" for the
+        'of primary importance' sense whose lemma "central" mostly means
+        something else; "currently" for the adverb of 'present').  Returns None
+        when no word fits better than the lemma (the caller uses lemma_of)."""
+        token = f"{cls}{int(idx)}"
+        e = self.ids.get(token)
+        if e is None:
+            return None
+        own = self._first_sense_owners()
+        c = "r" if adverb else cls                # an adjective slot needs an adjective
+        cands = own.get((c, token), [])
+        mine = e["lemma"].replace("_", " ").lower()
+        if any(lemma == mine for _, lemma in cands):
+            return None                           # its own lemma is right
+        # one plain word only: "date stamp the manuscript" reads worse than "date"
+        cands = [x for x in cands if x[1].isalpha()]
+        if not cands:
+            return None
+        if adverb and any(lemma == mine + "ly" or lemma == mine[:-1] + "ily" for _, lemma in cands):
+            return None                           # the ordinary -ly form means it: let the caller build it
+        # the commonest word (more senses goes with more use), then the shorter
+        return max(cands, key=lambda x: (x[0], -len(x[1]), x[1]))[1]
 
     def entry(self, token):
         m = WORD_RE.match(token)

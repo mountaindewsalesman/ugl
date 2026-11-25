@@ -10,6 +10,7 @@
 """
 __version__ = "0.3.1"
 
+from .core import WORD_RE
 from .lexicon import Lexicon, available
 from .decoder import Decoder
 from .tokenizer import Tokenizer
@@ -84,10 +85,30 @@ class UGL:
             except Exception as e:
                 bad[src] = f"round trip failed: {type(e).__name__}"
                 continue
-            if again != ugl:
+            if not self.same_reading(ugl, again):
                 bad[src] = f"round trip changed the UGL (decoded as: {english})"
         return [Line(l.ugl, l.source, l.issues + ((bad[l.source],) if l.source in bad else ()), l.spans)
                 for l in lines]
+
+    def same_reading(self, a, b):
+        """Do two encodings (lists of UGL lines) say the same thing as far as the
+        round trip can tell?  Token for token equal, except that two concepts
+        written with the same English word ("end" the part / "end" the
+        final stage) count as equal: the decoder said the right word, and which
+        of its senses it is was the sense model's choice, not the grammar's."""
+        ta, tb = " ".join(a).split(), " ".join(b).split()
+        if len(ta) != len(tb):
+            return False
+        for x, y in zip(ta, tb):
+            if x == y:
+                continue
+            mx, my = WORD_RE.match(x), WORD_RE.match(y)
+            if not (mx and my) or mx.group(1) != my.group(1) or mx.group(3) != my.group(3):
+                return False
+            cls = "v" if mx.group(1) == "nv" else mx.group(1)
+            if self.lexicon.lemma_of(cls, mx.group(2)) != self.lexicon.lemma_of(cls, my.group(2)):
+                return False
+        return True
 
     def encode_with_sources(self, text):
         """-> [(UGL line, the English sentence it came from)]; a long sentence

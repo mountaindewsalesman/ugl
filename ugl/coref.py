@@ -18,44 +18,51 @@ QUANTIFIER = {"both", "all", "each", "most", "many", "few"}     # "both are smel
 REFLEXIVE = {"himself", "herself", "itself", "themselves"}
 RELATIVE = {"who", "whom", "which", "that", "whose"}
 WINDOW = 2
+MALE_PRONOUNS = {"he", "him", "his", "himself"}
+# person nouns whose gender is part of the word: "her brother ... she" cannot be the brother
+GENDER = {**dict.fromkeys(
+    "man boy father brother son husband king prince uncle nephew grandfather grandson monk "
+    "actor waiter lord duke emperor gentleman boyfriend stepfather stepson widower groom "
+    "bridegroom sir baron count earl tsar sultan".split(), "m"),
+    **dict.fromkeys(
+    "woman girl mother sister daughter wife queen princess aunt niece grandmother granddaughter "
+    "nun actress waitress lady duchess empress girlfriend stepmother stepdaughter widow bride "
+    "baroness countess tsarina sultana mistress heroine".split(), "f")}
+
+
+def gender_of(e):
+    """m / f / None: from the noun itself, or learned from an earlier he / she."""
+    if e.gender is None and e.kind == "lex":
+        e.gender = GENDER.get(e.lemma.lower())
+    return e.gender
 
 
 def mentions(ev, sent_no, out, clause_subj=None):
-    """Collect (entity, role, sentence, clause subject) in textual order."""
-    def ent(e, role):
+    """Collect (entity, role, sentence, clause subject) in textual order, at any
+    depth: possessors of possessors ("the years of his life"), group members,
+    relative clauses, relation landmarks."""
+    def ent(e, role, csubj):
         if e is None:
             return
-        out.append((e, role, sent_no, clause_subj))
+        out.append((e, role, sent_no, csubj))
         if e.possessor is not None:
-            ent(e.possessor, "poss")
+            ent(e.possessor, "poss", csubj)
         for m in e.members:
-            ent(m, role)
+            ent(m, role, csubj)
         for r in e.restrictors:
             mentions(r, sent_no, out)
 
     # roles follow the English surface: in a passive the patient was the subject
     # ("The bridge was destroyed by the flood ... it" = the bridge)
-    subj = ev.obj if ev.passive and ev.obj is not None else ev.subj
-    ent(ev.subj, "obl" if ev.passive and ev.obj is not None else "subj")
-    clause_subj = subj
-    if ev.obj is not None:
-        out.append((ev.obj, "subj" if ev.passive else "obj", sent_no, subj))
-        if ev.obj.possessor is not None:
-            out.append((ev.obj.possessor, "poss", sent_no, subj))
-        for m in ev.obj.members:
-            out.append((m, "obj", sent_no, subj))
-        for r in ev.obj.restrictors:
-            mentions(r, sent_no, out)
+    passive = ev.passive and ev.obj is not None
+    subj = ev.obj if passive else ev.subj
+    ent(ev.subj, "obl" if passive else "subj", clause_subj)
+    ent(ev.obj, "subj" if ev.passive else "obj", subj)
     for r in ev.rels:
         if isinstance(r.landmark, Event):
             mentions(r.landmark, sent_no, out)
         else:
-            e = r.landmark
-            out.append((e, "obl", sent_no, subj))
-            if e.possessor is not None:
-                out.append((e.possessor, "poss", sent_no, subj))
-            for rr in e.restrictors:
-                mentions(rr, sent_no, out)
+            ent(r.landmark, "obl", subj)
     for c in ev.comps:
         mentions(c, sent_no, out)
     for _, c in ev.coord:
@@ -90,16 +97,23 @@ def resolve(events, unresolved=None, topic=None):
             mentions(ev, i, found)
     found.sort(key=_order)
     topic_e = topic_entity(found, topic) if topic else None
-    seen = []          # (entity, role, sentence) of real (non-pronoun) mentions
+    seen = []          # (entity, role, sentence, by pronoun?) of every mention with a referent
     for e, role, sno, csubj in found:
         if e.kind == "pronoun" and e.ref is None and e.lemma not in RELATIVE:
             e.ref = pick(e, role, sno, csubj, seen, topic_e)
+            if e.ref is not None and e.lemma in PERSONAL and e.ref.gender is None:
+                # "Ann ... she": Ann is female from now on, so a later "he" is someone else
+                e.ref.gender = "m" if e.lemma in MALE_PRONOUNS else "f"
+            if e.ref is not None:
+                # the chain goes on: "Her brother installed it on her laptop" - the
+                # second "her" continues the first one's referent
+                seen.append((e.ref.root(), role, sno, True))
             if e.ref is None:
                 if unresolved is not None:
                     unresolved.append((sno, e.lemma))
                 fallback(e)
         elif e.kind in ("lex", "name", "coord") and e.ref is None:
-            seen.append((e, role, sno))
+            seen.append((e, role, sno, False))
     return events
 
 
@@ -109,8 +123,9 @@ def pick(p, role, sno, csubj, seen, topic=None):
         return csubj.root() if csubj.kind != "pronoun" else csubj
     recent = [s for s in seen if sno - s[2] <= WINDOW]
     if w in PERSONAL:     # a name may be a person unless the dictionary knows it is not (Paris)
+        g = "m" if w in MALE_PRONOUNS else "f"
         ok = lambda e: ((e.kind == "name" and e.animate is not False) or e.is_person) \
-            and not e.plural and e.kind != "coord"
+            and not e.plural and e.kind != "coord" and gender_of(e) in (None, g)
     elif w in NEUTER:
         ok = lambda e: e.kind == "lex" and not e.is_person and not e.plural
     elif w in PLURAL or w in QUANTIFIER:
@@ -135,8 +150,9 @@ def pick(p, role, sno, csubj, seen, topic=None):
                 and (ok(topic) or (w in NEUTER and topic.kind == "name" and topic.animate is not True)):
             return topic
         return None
-    # salience: latest sentence first, then subjects, then latest mention
-    best = max(cands, key=lambda s: (s[2], s[1] == "subj", seen.index(s)))
+    # salience: latest sentence first, then what a pronoun already refers to
+    # (the entity the text is about), then subjects, then latest mention
+    best = max(cands, key=lambda s: (s[2], s[3], s[1] == "subj", seen.index(s)))
     return best[0]
 
 
