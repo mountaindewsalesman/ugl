@@ -35,6 +35,7 @@ worker.onmessage = (ev) => {
   const m = ev.data;
   if (m.type === "progress") return showProgress(m.label, m.loaded, m.total);
   if (m.type === "ready") return onReady(m.info);
+  if (m.type === "work") return showWork(m.id, m.done, m.total);
   if (m.id && waiting.has(m.id)) {
     const { resolve, reject } = waiting.get(m.id);
     waiting.delete(m.id);
@@ -87,6 +88,21 @@ function onFatal(msg) {
   $("bar-fill").classList.remove("indeterminate");
 }
 
+// encoding progress: sentences parsed and analyzed so far (worker "work" messages)
+function showWork(id, done, total) {
+  if (id !== state.encoding) return;          // progress of a superseded request
+  const fill = $("en-bar-fill");
+  fill.classList.remove("indeterminate");
+  fill.style.width = Math.min(100, (100 * done) / total).toFixed(1) + "%";
+}
+
+function startWork() {
+  const fill = $("en-bar-fill");
+  fill.classList.add("indeterminate");        // until the first sentence is parsed
+  fill.style.width = "";
+  $("en-bar").hidden = false;
+}
+
 // ------------------------------------------------------------ inputs
 function loadExample(g) {
   $("en").value = g.en;
@@ -106,7 +122,7 @@ async function onEnglish() {
   if (!state.ready) { note.hidden = false; note.textContent = "Waiting for Python to load..."; return; }
   const mine = ++encodeSeq;
   note.hidden = false;
-  // a spinner with elapsed seconds: parsing runs on the CPU in WebAssembly and a
+  // a progress bar and elapsed seconds: parsing runs on the CPU in WebAssembly and a
   // long paragraph takes a few seconds, which should never look like a hang
   const started = performance.now();
   const tick = () => {
@@ -114,10 +130,11 @@ async function onEnglish() {
     const s = Math.floor((performance.now() - started) / 1000);
     note.textContent = s ? `Encoding... ${s} s` : "Encoding...";
   };
-  note.classList.add("busy");
   tick();
   const timer = setInterval(tick, 500);
-  const done = () => { clearInterval(timer); if (mine === encodeSeq) note.classList.remove("busy"); };
+  const done = () => { clearInterval(timer); if (mine === encodeSeq) $("en-bar").hidden = true; };
+  state.encoding = state.seq + 1;             // the id ask() is about to use
+  startWork();
   try {
     const { data } = await ask(text, "encode");
     done();

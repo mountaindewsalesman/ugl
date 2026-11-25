@@ -65,7 +65,12 @@ async function boot() {
   return { glue, info };
 }
 
-const ready = boot();
+let current = 0;               // the request being worked on, for progress messages
+
+const ready = boot().then((r) => {
+  r.glue.set_progress((done, total) => self.postMessage({ type: "work", id: current, done, total }));
+  return r;
+});
 ready.then(
   ({ info }) => self.postMessage({ type: "ready", info }),
   (err) => self.postMessage({ type: "error", message: "Startup failed: " + (err && err.message || err) }),
@@ -76,6 +81,7 @@ self.onmessage = async (ev) => {
   try {
     const { glue } = await ready;
     if (cmd !== "analyze" && cmd !== "encode") throw new Error("unknown command " + cmd);
+    current = id;
     self.postMessage({ type: "result", id, data: JSON.parse(glue[cmd](text)) });
   } catch (err) {
     self.postMessage({ type: "error", id, message: String(err && err.message || err) });

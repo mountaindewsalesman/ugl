@@ -83,6 +83,12 @@ def explain_token(t):
     return {"token": t, "kind": "bad", "class": "not a UGL token"}
 
 
+def set_progress(fn):
+    """fn(done, total) is called as the encoder works through the sentences
+    (worker.js forwards it to the page's progress bar)."""
+    U.encoder.progress = lambda done, total: fn(done, total)
+
+
 def encode(text):
     """English -> UGL lines, with UGL's own parser (the same code as `ugl encode`)."""
     lines = U.encode_lines(text)

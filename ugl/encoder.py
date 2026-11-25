@@ -98,6 +98,9 @@ class Encoder:
         self.simplify = simplify
         self.unsure = unsure
         self.second_parser = None        # optional: a second parser for ensemble disagreement checks
+        # optional progress(done, total) callback: each sentence counts twice,
+        # once when parsed and once when analyzed (the playground's progress bar)
+        self.progress = None
 
     @property
     def unknown(self):
@@ -108,12 +111,15 @@ class Encoder:
         if self.strip_parens:
             text = strip_asides(text)
         out = []
-        for s in split_sentences(text):
+        sents = split_sentences(text)
+        for k, s in enumerate(sents):
             words = tokenize(s)
             if any(w[:1].isalnum() for w in words):
                 state = self.parser.score(words)
                 tree = self.parser.tree(state, self.parser.decode_tree(state["S"]))
                 out.append((words, tree, s.rstrip().endswith("?"), s.strip(), state))
+            if self.progress:
+                self.progress(k + 1, 2 * len(sents))
         return out
 
     def meaning(self, tree, words, question):
@@ -163,7 +169,9 @@ class Encoder:
         lines with no issues (see tools/build_corpus.py)."""
         parsed = self.parse(text)
         events, issues, toks = [], [], []
-        for words, tree, question, _, state in parsed:
+        for k, (words, tree, question, _, state) in enumerate(parsed):
+            if self.progress:
+                self.progress(len(parsed) + k, 2 * len(parsed))
             found = self.uncertain(words, tree, question, state)
             if not any(t["upos"] in ("VERB", "AUX") for t in tree):
                 # "Pathétique Sonata – Beethoven", "Lift Me Up - 5:52": the UGL would
