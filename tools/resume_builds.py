@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,16 +71,36 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--install-startup", action="store_true")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--max", type=int, default=None,
+                    help="keep at most this many builds running (more GPU processes than fit in its memory crash)")
+    ap.add_argument("--watch", type=int, default=None, metavar="SECONDS",
+                    help="keep checking: whenever fewer than --max run, resume the next unfinished build")
     a = ap.parse_args()
+    while True:
+        unfinished = check(a)
+        if not a.watch or not unfinished:
+            break
+        time.sleep(a.watch)
+
+
+def check(a):
+    """One pass: report every build, resume stopped ones (up to --max running).
+    -> the unfinished builds."""
     folder = os.path.abspath(a.folder)
     builds = state(folder)
     procs = running_commands()
     unfinished = [b for b in builds if b[2] < b[3]]
-    for name, files, done, total in builds:
-        live = any(os.path.join(folder, name) in c or f"\\{name}" in c for c in procs if "build_corpus" in c)
-        print(f"{name:26} {done:6}/{total:<6} documents  {'running' if live else 'finished' if done >= total else 'stopped'}")
-        if a.status or done >= total or live:
+    live = {name for name, *_ in builds
+            if any(os.path.join(folder, name) in c or f"\\{name}" in c for c in procs if "build_corpus" in c)}
+    slots = (a.max - len(live)) if a.max else len(builds)
+    print(time.strftime("%H:%M"), flush=True)
+    # TinyStories first when a slot opens: the corpus is meant to be mostly stories
+    for name, files, done, total in sorted(builds, key=lambda b: not b[0].startswith("tinystories")):
+        print(f"{name:26} {done:6}/{total:<6} documents  "
+              f"{'running' if name in live else 'finished' if done >= total else 'stopped'}", flush=True)
+        if a.status or done >= total or name in live or slots <= 0:
             continue
+        slots -= 1
         pid = start(["tools/build_corpus.py", *files, "--out", os.path.join(folder, name), "--resume",
                      "--device", a.device], os.path.join(folder, name))
         print(f"  resumed, pid {pid}")
@@ -93,6 +114,7 @@ def main():
     if not unfinished and os.path.exists(STARTUP):
         os.remove(STARTUP)                  # every build is done: nothing to resume after a reboot
         print("all builds finished; startup entry removed")
+    return unfinished
 
 
 if __name__ == "__main__":
