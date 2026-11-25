@@ -25,16 +25,23 @@ flagged only for a 60-80%-sure head (70% usable) or only for an unknown word
 
 Two ways to decide (see ugl.encoder.Encoder.encode_lines for the issues):
 
-  rules  (--no-grader, or no grader trained)  a sentence is rejected when any of
+  rules  (default)  a sentence is rejected when any of
          its lines has an issue: an uncertain parse, parsers disagreeing, an
          unstable round trip, a pronoun with no antecedent, a dropped or guessed piece.
-  grader (default when data/build/quality-grader exists; tools/train_quality.py)
+  grader (--grader [folder]; trained by tools/train_quality.py)
          sentences with a broken piece (HARD: dropped word, fragment, crash, ...)
          are rejected; every other sentence is scored by the grader (English vs the
          decoder's English for the UGL, plus the flags) and kept when the score is
          above the cut that kept --keep of the held-out test sentences.  On EWT test:
          rules keep 26% at 84% right; the grader keeps 40% at 87% right.
          The score is written with each kept sentence (scores.txt, passages.jsonl).
+         NOT the default: it does not transfer beyond EWT-like text.  On other
+         sources it kept half as many sentences as the rules (FineWeb-Edu 6.7% vs
+         13.3%, Simple Wikipedia 16% vs 32%: scores shift down on unfamiliar text,
+         so the EWT-calibrated cut is too strict), and among rule-rejected review
+         sentences it was sure of (score >= 0.9), 11 of 20 were wrong by hand.
+         Its labels come from EWT-style treebanks; it needs labels from the
+         corpus's own kinds of text before it can decide for them.
 
 Garbage in, garbage out: a smaller clean corpus beats a larger dirty one.
 """
@@ -86,14 +93,14 @@ def main():
     ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
     ap.add_argument("--allow", nargs="*", default=["unknown word"],
                     help="issue kinds to tolerate (default: 'unknown word'; pass --allow alone for none)")
-    ap.add_argument("--grader", default=None, help="quality grader folder (default: data/build/quality-grader)")
-    ap.add_argument("--no-grader", action="store_true", help="decide by the rules alone")
+    ap.add_argument("--grader", nargs="?", const="", default=None,
+                    help="decide judgment calls with the quality grader (folder; default data/build/quality-grader)")
     ap.add_argument("--keep", type=float, default=0.4,
                     help="grader cut: the share of held-out test sentences it kept (0.4: 87%% right there)")
     a = ap.parse_args()
     u = ugl.UGL()
     grader = None
-    if not a.no_grader:
+    if a.grader is not None:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from quality import DEFAULT_PATH as GRADER, QualityGrader
         path = a.grader or GRADER
