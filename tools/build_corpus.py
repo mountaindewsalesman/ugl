@@ -19,7 +19,7 @@ and a sentence needs every word >= 0.6 head confidence (only where the
 runner-up head would change the UGL) and both parsers to agree wherever it
 changes the UGL.  Words not in the dictionary are allowed (kept as literals).
 Why 0.6 and not 0.8, and why unknown words pass: hand grading of 181 sentences
-from 7 sources (data/build/review-grades-2026-11-25.jsonl) found sentences
+from 7 sources (data/review/grades-2026-11-25.jsonl) found sentences
 flagged only for a 60-80%-sure head (70% usable) or only for an unknown word
 (71%) as good as the fully clean ones (60%); below 60% sure, 54%.
 
