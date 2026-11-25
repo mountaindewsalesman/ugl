@@ -847,9 +847,18 @@ class Decoder:
         core = c.body
         while isinstance(core, Wrap) and VERB_KIND.get(core.rel.idx) != "quant":
             core = core.body                          # stacked relations: look at the clause inside
-        if isinstance(core, Core) and core.obj is not None and not question:
+        obj_gap = isinstance(core, Core) and self.matches(core.obj, ctx.gap)
+        subj_gap = isinstance(core, Core) and self.matches(core.subj, ctx.gap)
+        after = isinstance(core, Core) and ((core.obj is not None and not obj_gap) or core.comps)
+        if after and not question:
             # "Simon read his book on the bank": a final phrase could attach to the
-            # object; in front it can only modify the clause, as it does in UGL
+            # object, or to the last verb of a complement clause ("announced that X
+            # produces Y in May"); in front it can only modify the clause, as in UGL
+            if subj_gap or obj_gap:
+                # inside a relative clause the front is after the relative word:
+                # "who, in 2016, served the party"
+                first, _, rest = body.partition(" ")
+                return f"{first}, {rel}, {rest}"
             return f"{rel}, {body}"                  # (the sentence start is capitalised once, at the end)
         return f"{body} {rel}".strip()
 

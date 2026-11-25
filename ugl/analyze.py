@@ -217,6 +217,8 @@ def name_parts(t):
     for c in t.kids:
         if c.deprel in ("flat", "flat:name", "compound") and c.upos == "PROPN":
             out += [c] + name_parts(c)
+        elif c.deprel in ("flat", "flat:name") and c.upos == "NUM" and c.i > t.i:
+            out.append(c)                        # a number inside a name: "UFC 198", "Fight Night 116"
         elif c.deprel == "amod" and c.upos in ("ADJ", "PROPN") and c.form[:1].isupper() and c.i < t.i \
                 and t.deprel in ("flat", "flat:name", "compound"):
             out.append(c)                        # capitalised adjective inside the name: "United"
