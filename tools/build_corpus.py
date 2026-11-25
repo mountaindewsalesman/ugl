@@ -7,6 +7,10 @@ Writes:
     corpus/ugl.txt        one clean UGL line per line (training data)
     corpus/english.txt    the English sentence each clean line came from
     corpus/rejected.tsv   flagged sentences: English \t issues   (to inspect / fix)
+    corpus/passages.jsonl runs of consecutive kept sentences from one paragraph,
+                          {"source", "title", "english": [...], "ugl": [...]}:
+                          connected text for language-model training (a rejected
+                          sentence ends a run, so no passage jumps over a gap)
 and prints how many sentences were kept and why the others were rejected.
 
 Defaults (measured with tools/calibrate_parser.py on the EWT test set): the
@@ -22,6 +26,7 @@ Garbage in, garbage out: a smaller clean corpus beats a larger dirty one.
 """
 import argparse
 import collections
+import json
 import os
 import re
 import sys
@@ -72,36 +77,51 @@ def main():
     fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8")
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")
     fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8")
-    kept = seen = 0
+    fp = open(os.path.join(a.out, "passages.jsonl"), "w", encoding="utf-8")
+    passages = kept = seen = 0
     why = collections.Counter()
-    def full():
-        return a.max_sents and seen >= a.max_sents
 
-    for title, text in documents(a.files):
-        for para in paragraphs(text):
-            if len(para) < 40:
-                continue
-            # one paragraph at a time: pronouns refer back within it, or to the title
-            by_src = collections.OrderedDict()
-            for line in u.encode_lines(para, topic=title, roundtrip=not a.no_roundtrip):
-                by_src.setdefault(line.source, []).append(line)
-            for src, lines in by_src.items():
-                seen += 1
-                issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
-                if issues:
-                    why.update({kind(i) for i in issues})
-                    fr.write(src.replace("\t", " ") + "\t" + " | ".join(issues) + "\n")
-                else:
-                    kept += 1
-                    fu.write("\n".join(l.ugl for l in lines) + "\n")
-                    fe.write(re.sub(r"\s+", " ", src) + "\n")
-                if full():
-                    break
-            if full():
+    def paragraph_units():
+        """(source, title, paragraph) for every paragraph worth encoding; the
+        source is the folder the file sits in (scripts/fetch_sources.py)."""
+        for path in a.files:
+            source = os.path.basename(os.path.dirname(os.path.abspath(path)))
+            for title, text in documents([path]):
+                for para in paragraphs(text):
+                    if len(para) >= 40:
+                        yield source, title, para
+
+    for source, title, para in paragraph_units():
+        # one paragraph at a time: pronouns refer back within it, or to the title
+        by_src = collections.OrderedDict()
+        for line in u.encode_lines(para, topic=title, roundtrip=not a.no_roundtrip):
+            by_src.setdefault(line.source, []).append(line)
+        runs, run = [], []
+        for src, lines in by_src.items():
+            seen += 1
+            issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
+            if issues:
+                why.update({kind(i) for i in issues})
+                fr.write(src.replace("\t", " ") + "\t" + " | ".join(issues) + "\n")
+                runs.append(run)
+                run = []
+            else:
+                kept += 1
+                eng, code = re.sub(r"\s+", " ", src), "\n".join(l.ugl for l in lines)
+                fu.write(code + "\n")
+                fe.write(eng + "\n")
+                run.append((eng, code))
+            if a.max_sents and seen >= a.max_sents:
                 break
-        if full():
+        for r in runs + [run]:
+            if r:
+                fp.write(json.dumps({"source": source, "title": title, "english": [e for e, _ in r],
+                                     "ugl": [c for _, c in r]}, ensure_ascii=False) + "\n")
+                passages += 1
+        if a.max_sents and seen >= a.max_sents:
             break
-    print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected")
+    print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "
+          f"{passages} passages ({kept / max(1, passages):.1f} sentences each)")
     for k, n in why.most_common():
         print(f"  {k:22} {n:6}  ({n / max(1, seen):.1%} of sentences)")
 

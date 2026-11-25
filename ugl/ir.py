@@ -34,7 +34,10 @@ class Attr:
                 yield from a.leaves()
 
 
-@dataclass
+# Entities and events are individuals (this mention, this event), not values:
+# they compare by identity.  Value equality would also recurse forever, since a
+# relative clause inside an entity points back at it.
+@dataclass(eq=False)
 class Entity:
     kind: str                       # lex | name | num | reserved | pronoun | coord | ref
     lemma: str = ""                 # lex/unknown: lemma; name: the name; num: digits; reserved: token (n1..)
@@ -83,7 +86,7 @@ class Rel:
     neg: bool = False
 
 
-@dataclass
+@dataclass(eq=False)
 class Event:
     pred: str                         # verb | be | have | exist
     lemma: str = ""

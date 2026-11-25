@@ -516,3 +516,24 @@ def test_number_ranges_and_counted_compounds():
     for l in ("Sprouting occurs within 40–60 days.", "Obukhov signed a 2-year contract."):
         a = U.encode(l)
         assert U.encode(U.decode("\n".join(a))) == a
+
+
+def test_entities_compare_by_identity():
+    # coreference ranks candidate antecedents; value equality on entities
+    # recursed forever once a relative clause pointed back at its own head
+    # (OpenAssistant text, found by scripts/fetch_sources.py + roundtrip_report)
+    para = ('To use this for "pushing" and "pulling", we\'ll put two images through the neural network. '
+            "Let's say the images are of a cat and a dog, so we want to increase the distance between the two. "
+            "We pick one neuron weight from the network and make it a variable `x`, then construct a function that "
+            "calculates the output of the network based on it and all the other parameters; let's call it `N(x)`. "
+            "The distance between the cat and dog outputs would be `f(x) = N(cat) - N(dog)`. (Of course, the real "
+            "output would have more than 1 dimension, but we're simplifying.) We now want to nudge the weight such "
+            "that it moves the two outputs slightly further apart. For that, we can simply take the derivative! "
+            "If `f'(x)` is positive, that means that increasing the weight will move them further apart, so we "
+            "should do that. If it's negative, then it'll move them closer, so we'll want to slightly decrease "
+            "the weight instead. Apply this to all the neurons enough times and your network will soon converge "
+            "to a pretty good cat-dog separator!")
+    assert lines(para)
+    from ugl.ir import Entity
+    a, b = Entity("lex", "dog"), Entity("lex", "dog")
+    assert a != b and a == a and len({a, b}) == 2
