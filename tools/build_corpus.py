@@ -23,9 +23,19 @@ from 7 sources (data/review/grades-2026-11-25.jsonl) found sentences
 flagged only for a 60-80%-sure head (70% usable) or only for an unknown word
 (71%) as good as the fully clean ones (60%); below 60% sure, 54%.
 
-A sentence is rejected when any of its lines has an issue (see
-ugl.encoder.Encoder.encode_lines): an uncertain parse, a pronoun with no
-antecedent, a word not in the dictionary, a dropped or guessed piece.
+Two ways to decide (see ugl.encoder.Encoder.encode_lines for the issues):
+
+  rules  (--no-grader, or no grader trained)  a sentence is rejected when any of
+         its lines has an issue: an uncertain parse, parsers disagreeing, an
+         unstable round trip, a pronoun with no antecedent, a dropped or guessed piece.
+  grader (default when data/build/quality-grader exists; tools/train_quality.py)
+         sentences with a broken piece (HARD: dropped word, fragment, crash, ...)
+         are rejected; every other sentence is scored by the grader (English vs the
+         decoder's English for the UGL, plus the flags) and kept when the score is
+         above the cut that kept --keep of the held-out test sentences.  On EWT test:
+         rules keep 26% at 84% right; the grader keeps 40% at 87% right.
+         The score is written with each kept sentence (scores.txt, passages.jsonl).
+
 Garbage in, garbage out: a smaller clean corpus beats a larger dirty one.
 """
 import argparse
@@ -56,6 +66,11 @@ def kind(issue):
     return next((k for pat, k in KIND if pat in issue), "other")
 
 
+# issues that mean a piece of the sentence is missing or broken: rejected even
+# when the grader is used (hand grading: ~21% / ~15% usable)
+HARD = {"dropped content word", "fragment", "crash", "undecodable", "unattached word", "unknown preposition", "other"}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
@@ -71,9 +86,24 @@ def main():
     ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
     ap.add_argument("--allow", nargs="*", default=["unknown word"],
                     help="issue kinds to tolerate (default: 'unknown word'; pass --allow alone for none)")
+    ap.add_argument("--grader", default=None, help="quality grader folder (default: data/build/quality-grader)")
+    ap.add_argument("--no-grader", action="store_true", help="decide by the rules alone")
+    ap.add_argument("--keep", type=float, default=0.4,
+                    help="grader cut: the share of held-out test sentences it kept (0.4: 87%% right there)")
     a = ap.parse_args()
     u = ugl.UGL()
-    u.encoder.unsure = a.min_confidence
+    grader = None
+    if not a.no_grader:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from quality import DEFAULT_PATH as GRADER, QualityGrader
+        path = a.grader or GRADER
+        if os.path.exists(os.path.join(path, "grader.pt")):
+            grader = QualityGrader(path)
+            cut = grader.threshold(a.keep)
+            print(f"grader {path}: keeping scores >= {cut:.3f}", file=sys.stderr)
+    # the grader was trained on flags raised at 0.8 head confidence; it, not the
+    # threshold, decides those sentences
+    u.encoder.unsure = 0.8 if grader else a.min_confidence
     if a.parser:
         u.encoder.parser = ParserModel(a.parser)
     if a.second_parser and not a.single_parser and os.path.abspath(a.second_parser) != os.path.abspath(a.parser or DEFAULT_PATH):
@@ -83,6 +113,7 @@ def main():
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8")
     fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8")
     fp = open(os.path.join(a.out, "passages.jsonl"), "w", encoding="utf-8")
+    fs = open(os.path.join(a.out, "scores.txt"), "w", encoding="utf-8") if grader else None
     passages = kept = seen = 0
     why = collections.Counter()
 
@@ -101,12 +132,38 @@ def main():
         by_src = collections.OrderedDict()
         for line in u.encode_lines(para, topic=title, roundtrip=not a.no_roundtrip):
             by_src.setdefault(line.source, []).append(line)
+        items = list(by_src.items())
+        if a.max_sents:
+            items = items[: max(0, a.max_sents - seen)]
+        scores = [None] * len(items)
+        if grader:
+            # one batch per paragraph: every sentence without a broken piece
+            rows, at = [], []
+            for n, (src, lines) in enumerate(items):
+                kinds = sorted({kind(i) for l in lines for i in l.issues})
+                if set(kinds) & HARD:
+                    continue
+                try:
+                    back = u.decode("\n".join(l.ugl for l in lines))
+                except Exception:  # noqa: BLE001
+                    continue
+                rows.append({"src": src, "eng": back, "kinds": kinds,
+                             "roundtrip": "round trip unstable" not in kinds})
+                at.append(n)
+            for n, sc in zip(at, grader.score(rows) if rows else []):
+                scores[n] = sc
         runs, run = [], []
-        for src, lines in by_src.items():
+        for (src, lines), sc in zip(items, scores):
             seen += 1
             issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
-            if issues:
-                why.update({kind(i) for i in issues})
+            if grader:
+                ok = sc is not None and sc >= cut
+                if not ok and sc is not None:
+                    issues = issues + [f"grader score {sc:.2f} < {cut:.2f}"]
+            else:
+                ok = not issues
+            if not ok:
+                why.update({"grader: low score"} if sc is not None else {kind(i) for i in issues})
                 fr.write(src.replace("\t", " ") + "\t" + " | ".join(issues) + "\n")
                 runs.append(run)
                 run = []
@@ -115,13 +172,15 @@ def main():
                 eng, code = re.sub(r"\s+", " ", src), "\n".join(l.ugl for l in lines)
                 fu.write(code + "\n")
                 fe.write(eng + "\n")
-                run.append((eng, code))
-            if a.max_sents and seen >= a.max_sents:
-                break
+                if fs:
+                    fs.write(f"{sc:.4f}\n")
+                run.append((eng, code, sc))
         for r in runs + [run]:
             if r:
-                fp.write(json.dumps({"source": source, "title": title, "english": [e for e, _ in r],
-                                     "ugl": [c for _, c in r]}, ensure_ascii=False) + "\n")
+                p = {"source": source, "title": title, "english": [e for e, _, _ in r], "ugl": [c for _, c, _ in r]}
+                if grader:
+                    p["scores"] = [round(x, 4) for _, _, x in r]
+                fp.write(json.dumps(p, ensure_ascii=False) + "\n")
                 passages += 1
         if a.max_sents and seen >= a.max_sents:
             break

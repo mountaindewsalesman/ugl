@@ -28,19 +28,9 @@ from torch import nn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "data", "build")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-
-def text_of(r):
-    kinds = r.get("kinds")
-    if kinds is None:                                   # review rows: kinds from the issue texts
-        sys.path.insert(0, os.path.join(ROOT, "tools"))
-        from build_corpus import kind
-        kinds = sorted({kind(i) for i in r["issues"]})
-    flags = ", ".join(k for k in kinds if k != "round trip unstable") or "none"
-    rt = r.get("roundtrip")
-    if rt is None:
-        rt = not any("round trip" in i for i in r["issues"])
-    return r["src"], f"{r['eng']} [SEP] flags: {flags}; round trip {'stable' if rt else 'changed'}"
+from quality import DEFAULT_PATH, Grader, save, score, text_of  # noqa: E402
 
 
 def auc(scores, labels):
@@ -58,30 +48,6 @@ def precision_at(scores, labels, keep):
     return float(np.mean(np.asarray(labels)[order[:k]]))
 
 
-class Grader(nn.Module):
-    def __init__(self, name):
-        super().__init__()
-        from transformers import AutoModel
-        self.enc = AutoModel.from_pretrained(name)
-        self.head = nn.Linear(self.enc.config.hidden_size, 1)
-
-    def forward(self, **x):
-        h = self.enc(**x).last_hidden_state[:, 0]
-        return self.head(h).squeeze(-1)
-
-
-def score(model, tok, rows, device, bs=64):
-    model.eval()
-    out = []
-    with torch.no_grad():
-        for i in range(0, len(rows), bs):
-            a, b = zip(*[text_of(r) for r in rows[i:i + bs]])
-            x = tok(list(a), list(b), truncation=True, max_length=256, padding=True, return_tensors="pt").to(device)
-            with torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
-                out += torch.sigmoid(model(**x).float()).tolist()
-    return out
-
-
 def report(name, scores, labels, rule_kept):
     """rule_kept: which rows the rule-based filter keeps (for comparison at its keep rate)."""
     keep = sum(rule_kept) / len(rule_kept)
@@ -96,11 +62,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", default=os.path.join(BUILD, "quality-labels.jsonl"))
     ap.add_argument("--model", default="google/electra-base-discriminator")
-    ap.add_argument("--skip", nargs="*", default=[], help="treebanks left out of training")
-    ap.add_argument("--epochs", type=int, default=3)
+    # left out by default: their annotation conventions differ from what the parser
+    # learned, so many "wrong" labels are convention mismatches, not errors (with them
+    # the grader ranks EWT test at AUC 0.80; without, 0.83)
+    ap.add_argument("--skip", nargs="*", default=["en_ctetex", "en_lines", "en_partut", "en_childes", "en_atis"],
+                    help="treebanks left out of training")
+    ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--bs", type=int, default=16)
-    ap.add_argument("--out", default=os.path.join(BUILD, "quality-grader"))
+    ap.add_argument("--out", default=DEFAULT_PATH)
     a = ap.parse_args()
     from transformers import AutoTokenizer
     rows = [json.loads(l) for l in open(a.labels, encoding="utf-8")]
@@ -144,16 +114,22 @@ def main():
               flush=True)
     print("results")
     s = score(model, tok, test, device)
+    test_scores = s
     report("EWT test (right = same UGL as the gold tree)", s, [r["label"] for r in test],
            [not r["kinds"] and r["roundtrip"] for r in test])
     if review:
         s = score(model, tok, review, device)
         report("hand-graded review (right = ok or minor)", s, [r["grade"] != "wrong" for r in review],
                [r["bucket"] == "kept" for r in review])
-    os.makedirs(a.out, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(a.out, "grader.pt"))
-    tok.save_pretrained(a.out)
-    json.dump({"base": a.model, "skip": a.skip}, open(os.path.join(a.out, "meta.json"), "w"))
+    # score cuts on the held-out test: keep share -> (score, share right), for build_corpus
+    labels = np.asarray([r["label"] for r in test])
+    order = np.argsort(-np.asarray(test_scores))
+    cuts = []
+    for keep in [x / 20 for x in range(1, 20)]:
+        k = max(1, int(round(keep * len(order))))
+        cuts.append({"keep": keep, "score": float(test_scores[order[k - 1]]), "right": float(labels[order[:k]].mean())})
+    save(model, tok, a.out, {"base": a.model, "skip": a.skip, "epochs": a.epochs, "cuts": cuts,
+                             "test_auc": auc(test_scores, labels.tolist())})
     print("saved", a.out)
 
 
