@@ -24,6 +24,9 @@ globalThis.self = {
   postMessage(m) {
     if (m.type === "progress") {
       if (!m.total || m.loaded === m.total) console.log("progress:", m.label, m.loaded ?? "", m.total ?? "");
+    } else if (m.type === "work") {
+      // encoding progress (sentences done of total) for the page's bar: carries the
+      // request id but is not its answer
     } else if (m.type === "ready") { console.log("ready", JSON.stringify(m.info)); readyRes(); }
     else if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
     else { console.log("message", JSON.stringify(m)); if (m.type === "error") readyRej(m); }
