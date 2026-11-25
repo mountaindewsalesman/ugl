@@ -370,6 +370,17 @@ REL_WORD = {V["time"]: "at", V["cause"]: "because of", V["of"]: "of", V["by"]: "
             V["in front of"]: "in front of", V["out of"]: "out of"}
 # relations whose English word is a subordinating conjunction: a full clause may follow
 SUBORDINATORS = {V["before"], V["after"], V["until"], V["since"]}
+
+
+# words that compare without -er / more: "different from" is also "different than"
+COMPARING = {"different", "differently", "other", "otherwise", "else", "rather"}
+
+
+def negated(prep, mods):
+    """A relation with the negation letter: with -> without, like -> unlike."""
+    if "x" not in mods:
+        return prep
+    return {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
 QUANT_WORD = {V["all"]: "every", V["most"]: "most", V["many"]: "many", V["few"]: "few"}
 RESERVED_NOUN_BASES = {f"n{i}" for i in RESERVED_NOUNS}
 # one-word pronouns that take their adjectives after them ("something new", "nobody else")
@@ -767,7 +778,9 @@ class Decoder:
             return f"when {a}, {b}"
         if r == V["during"]:
             return f"while {a}, {b}"
-        prep = REL_WORD.get(r, name)
+        prep = negated(REL_WORD.get(r, name), m)       # "without paying"
+        if r == V["against"] and "x" not in m and self.compares(self.core_of(c.b)):
+            prep = "than"                              # "more effective than telling"
         if r in SUBORDINATORS:                         # "after he left": a clause can follow
             if self.same_subject(c.a, c.b):
                 a = self.gerund(c.a, ctx)              # "after matriculating"
@@ -847,6 +860,10 @@ class Decoder:
         core = c.body
         while isinstance(core, Wrap) and VERB_KIND.get(core.rel.idx) != "quant":
             core = core.body                          # stacked relations: look at the clause inside
+        if r == V["against"] and "x" not in c.rel.mods and self.compares(core):
+            # "taller than his brother", "play differently than girls": the
+            # comparison relation after a comparison is said "than", at the end
+            return f"{body} than {self.np(c.land, ctx, 'obj')}".strip()
         obj_gap = isinstance(core, Core) and self.matches(core.obj, ctx.gap)
         subj_gap = isinstance(core, Core) and self.matches(core.subj, ctx.gap)
         after = isinstance(core, Core) and ((core.obj is not None and not obj_gap) or core.comps)
@@ -862,6 +879,23 @@ class Decoder:
             return f"{rel}, {body}"                  # (the sentence start is capitalised once, at the end)
         return f"{body} {rel}".strip()
 
+    def compares(self, core):
+        """Does a clause compare (more / -er / less, or different, other, rather)?"""
+        if not isinstance(core, Core):
+            return False
+        toks = list(core.advs) + [core.verb]
+        for x in list(core.comps) + ([core.obj] if core.obj is not None else []):
+            if isinstance(x, NP):
+                toks += [x.head] + list(x.adjs)
+            elif isinstance(x, Tok):
+                toks.append(x)
+        for t in toks:
+            if t.kind == "word" and (set(t.mods) & set("rl")):
+                return True
+            if t.kind == "word" and t.cls == "a" and self.lemma(t) in COMPARING:
+                return True
+        return False
+
     def preposition(self, c):
         r = c.rel.idx
         prep = REL_WORD.get(r, RESERVED_VERBS[r][0])
@@ -869,9 +903,7 @@ class Decoder:
         if r == V["time"] and m:
             # calendar landmarks: "in 2017", "in June 1944", "on 21 June 1940", "on 11 March"
             prep = "on" if m.group(2).count("-") == 2 else "in"
-        if "x" in c.rel.mods:
-            prep = {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
-        return prep
+        return negated(prep, c.rel.mods)
 
     def relation(self, c, ctx):
         """A relation wrapper's own words: "to the school"."""

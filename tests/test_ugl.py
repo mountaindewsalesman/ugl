@@ -537,3 +537,35 @@ def test_entities_compare_by_identity():
     from ugl.ir import Entity
     a, b = Entity("lex", "dog"), Entity("lex", "dog")
     assert a != b and a == a and len({a, b}) == 2
+
+
+def test_without_clause_keeps_its_negation():
+    # "without paying" = with + not, like the preposition "without a word"
+    for en in ("She left without saying a word.", "She left without a word."):
+        ugl_text = "\n".join(U.encode(en))
+        assert "v52x" in ugl_text, ugl_text
+        assert "without" in U.decode(ugl_text)
+
+
+def test_over_a_time_is_during():
+    assert "v23" in U.encode("Over the years, Microsoft has released hundreds of applications.")[0]
+    assert "v34" in U.encode("The plane flew over the mountains.")[0]
+
+
+def test_comparison_relation_is_said_than():
+    assert "taller than" in U.decode(U.encode("He is taller than his brother.")[0])
+    assert "effective than" in U.decode(U.encode("Showing can be more effective than telling.")[0])
+    assert "against" in U.decode(U.encode("He fought against the king.")[0])
+
+
+def test_date_heading_is_the_time_of_its_sentence():
+    for en in ("April 29, 1991 - A cyclone in Bangladesh kills many people.",
+               "August 17 1960: Gabon becomes independent."):
+        ls = U.encode(en)
+        assert len(ls) == 1 and ls[0].startswith("#") and " v20 " in ls[0], ls
+
+
+def test_names_with_of_stay_one_name():
+    ls = lines("He is a professor at the University of Michigan.")
+    assert "'University_of_Michigan'" in ls[0].ugl, ls
+    assert "n239y" in U.encode("The capital of France is Paris.")[0]     # ordinary "of" unchanged

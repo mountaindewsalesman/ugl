@@ -68,6 +68,7 @@ PREP = {
 }
 NEGATING = {"without", "unlike"}
 TIME_SENSITIVE = {"at", "in", "on"}        # become "time" when the landmark is a time
+TIME_SPAN = {"over"}                       # become "during" when the landmark is a time
 # subordinator -> relation name (clause form)
 SUBORD = {"because": "cause", "since": "cause", "as": "cause", "if": "if",
           "unless": "if", "when": "time", "whenever": "time", "once": "after", "while": "during",
@@ -152,6 +153,26 @@ def build_tokens(sent):
     return toks
 
 
+def date_parts(t):
+    """If t heads a date ("14 February 2025", "February 14, 2025",
+    "February 2025", "14 February"): (literal, tokens).  Else None."""
+    # (a part with its own preposition or dash is a separate phrase: "– February 2026")
+    part = lambda k: k.deprel in DATE_LINKS and not k.dep("case")
+    toks = [t] + [k for k in t.kids if part(k)]
+    toks += [g for k in toks[1:] for g in k.kids if part(g)]
+    month = [x for x in toks if x.lower.rstrip(".") in MONTHS and x.upos in ("PROPN", "NOUN", "NUM", "X")]
+    nums = [x for x in toks if x.upos == "NUM" and re.fullmatch(r"\d{1,4}(st|nd|rd|th)?", x.lower)]
+    if len(month) != 1 or not nums:
+        return None
+    day = [x for x in nums if len(re.sub(r"\D", "", x.lower)) <= 2 and 1 <= int(re.sub(r"\D", "", x.lower)) <= 31]
+    year = [x for x in nums if len(x.lower) == 4 and x.lower.isdigit()]
+    if len(day) > 1 or len(year) > 1 or len(day) + len(year) != len(nums):
+        return None
+    m = MONTHS[month[0].lower.rstrip(".")]
+    lit = date_value(re.sub(r"\D", "", day[0].lower) if day else None, m, year[0].lower if year else None)
+    return lit, month + nums
+
+
 # ------------------------------------------------------------------ tree normalisation
 def semi_modal(v):
     """'have to X', 'is able to X', 'is going to X', 'is supposed to X':
@@ -208,6 +229,34 @@ def restructure(toks):
         v.kids, v.head, v.deprel, v.lemma = [], k.i, "aux", key
         k.kids.append(v)
         k.kids.sort(key=lambda x: x.i)
+    headline(toks)
+
+
+HEADLINE_LINKS = ("parataxis", "appos", "dep", "list")
+
+
+def headline(toks):
+    """A date heading its own sentence is that sentence's time:
+        April 29, 1991 - A cyclone kills ...  ->  kills -obl:tmod-> April 29, 1991
+        August 17 1960: Gabon becomes independent.
+    (parsers make the date the root and the sentence a side remark of it, which
+    would say "29 April 1991 is." and then the sentence)."""
+    root = next((t for t in toks if t.head < 0), None)
+    if root is None or date_parts(root) is None:
+        return
+    pred = next((k for k in root.kids if k.deprel in HEADLINE_LINKS
+                 and k.dep("nsubj", "nsubj:pass", "csubj", "csubj:pass", "expl")), None)
+    if pred is None:
+        return
+    root.kids.remove(pred)
+    pred.head, pred.deprel = -1, "root"
+    root.head, root.deprel = pred.i, "obl:tmod"
+    for p in [k for k in root.kids if k.deprel == "punct"]:
+        root.kids.remove(p)                      # the heading's dash / colon / full stop
+        p.head = pred.i
+        pred.kids.append(p)
+    pred.kids.append(root)
+    pred.kids.sort(key=lambda x: x.i)
 
 
 def name_parts(t):
@@ -222,6 +271,21 @@ def name_parts(t):
         elif c.deprel == "amod" and c.upos in ("ADJ", "PROPN") and c.form[:1].isupper() and c.i < t.i \
                 and t.deprel in ("flat", "flat:name", "compound"):
             out.append(c)                        # capitalised adjective inside the name: "United"
+    # "University of Michigan", "School of American Ballet", "Bank of the West":
+    # a name word, then "of" (+ "the") and another name right after it, is one
+    # name; read as "Michigan's University" it would be a different thing
+    end = max([t.i] + [p.i for p in out])
+    for c in t.kids:
+        case = c.dep("case")
+        if not (c.deprel == "nmod" and c.upos == "PROPN" and t.upos == "PROPN" and c.i > end
+                and t.form[:1].isupper() and c.form[:1].isupper()
+                and len(case) == 1 and case[0].lower == "of" and case[0].i == end + 1):
+            continue
+        span = name_span(c)                      # with capitalised adjectives: "American Ballet"
+        dets = [d for d in c.dep("det") if d.lower == "the" and d.i == end + 2]
+        if span[0].i != end + 2 + len(dets):
+            continue                             # something else between "of" and the name
+        out += case + dets + span
     return out
 
 
@@ -597,26 +661,12 @@ class Analyzer:
             rel = "of"
         if rel in TIME_SENSITIVE and self.is_time(k, land):
             rel = "time"
+        elif prep in TIME_SPAN and land.kind != "num" and self.is_time(k, land):
+            rel = "during"                       # "over the years": throughout, not above
         return Rel(rel, land, neg=prep in NEGATING)
 
     def date_parts(self, t):
-        """If t heads a date ("14 February 2025", "February 14, 2025",
-        "February 2025", "14 February"): (literal, tokens).  Else None."""
-        # (a part with its own preposition or dash is a separate phrase: "– February 2026")
-        part = lambda k: k.deprel in DATE_LINKS and not k.dep("case")
-        toks = [t] + [k for k in t.kids if part(k)]
-        toks += [g for k in toks[1:] for g in k.kids if part(g)]
-        month = [x for x in toks if x.lower.rstrip(".") in MONTHS and x.upos in ("PROPN", "NOUN", "NUM", "X")]
-        nums = [x for x in toks if x.upos == "NUM" and re.fullmatch(r"\d{1,4}(st|nd|rd|th)?", x.lower)]
-        if len(month) != 1 or not nums:
-            return None
-        day = [x for x in nums if len(re.sub(r"\D", "", x.lower)) <= 2 and 1 <= int(re.sub(r"\D", "", x.lower)) <= 31]
-        year = [x for x in nums if len(x.lower) == 4 and x.lower.isdigit()]
-        if len(day) > 1 or len(year) > 1 or len(day) + len(year) != len(nums):
-            return None
-        m = MONTHS[month[0].lower.rstrip(".")]
-        lit = date_value(re.sub(r"\D", "", day[0].lower) if day else None, m, year[0].lower if year else None)
-        return lit, month + nums
+        return date_parts(t)
 
     def timeish(self, t):
         """Does token t head a time expression (a number, a date, a time noun)?"""
@@ -683,7 +733,8 @@ class Analyzer:
         sub = self.clause(k, inherit_subj=surface)
         if key == "unless":
             sub.mods += "x"
-        return Rel(rel, sub)
+        # "without paying" = with + not, as for the preposition ("without a word")
+        return Rel(rel, sub, neg=bool(words) and (key in NEGATING or words[0] in NEGATING))
 
     def complement(self, k, main):
         if k.deprel == "xcomp":

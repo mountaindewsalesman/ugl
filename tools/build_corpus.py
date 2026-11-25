@@ -15,9 +15,13 @@ and prints how many sentences were kept and why the others were rejected.
 
 Defaults (measured with tools/calibrate_parser.py on the EWT test set): the
 ELECTRA-base parser reads the text, the shipped small parser reads it again,
-and a sentence needs every word >= 0.8 head confidence and both parsers to
-agree wherever it changes the UGL.  Sentences with a wrong head among those
-kept: 24% unfiltered, 11% with confidence alone, 6% with both.
+and a sentence needs every word >= 0.6 head confidence (only where the
+runner-up head would change the UGL) and both parsers to agree wherever it
+changes the UGL.  Words not in the dictionary are allowed (kept as literals).
+Why 0.6 and not 0.8, and why unknown words pass: hand grading of 181 sentences
+from 7 sources (data/build/review-grades-2026-11-25.jsonl) found sentences
+flagged only for a 60-80%-sure head (70% usable) or only for an unknown word
+(71%) as good as the fully clean ones (60%); below 60% sure, 54%.
 
 A sentence is rejected when any of its lines has an issue (see
 ugl.encoder.Encoder.encode_lines): an uncertain parse, a pronoun with no
@@ -57,7 +61,7 @@ def main():
     ap.add_argument("files", nargs="+")
     ap.add_argument("--out", default="corpus")
     ap.add_argument("--max-sents", type=int, default=None)
-    ap.add_argument("--min-confidence", type=float, default=0.8,
+    ap.add_argument("--min-confidence", type=float, default=0.6,
                     help="calibrated head probability every word needs (see tools/calibrate_parser.py)")
     ap.add_argument("--parser", default=BASE if os.path.exists(BASE) else None,
                     help="parser weights (default: the larger corpus parser when built, else the shipped one)")
@@ -65,7 +69,8 @@ def main():
                     help="another parser's weights: sentences where the two give different UGL are rejected")
     ap.add_argument("--single-parser", action="store_true", help="skip the two-parser agreement check")
     ap.add_argument("--no-roundtrip", action="store_true", help="skip the encode-decode-encode check")
-    ap.add_argument("--allow", nargs="*", default=[], help="issue kinds to tolerate, e.g. 'unknown word'")
+    ap.add_argument("--allow", nargs="*", default=["unknown word"],
+                    help="issue kinds to tolerate (default: 'unknown word'; pass --allow alone for none)")
     a = ap.parse_args()
     u = ugl.UGL()
     u.encoder.unsure = a.min_confidence
