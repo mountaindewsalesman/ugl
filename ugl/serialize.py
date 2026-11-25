@@ -19,6 +19,7 @@ class Serializer:
         self.lex = lexicon
         self.unknown = set()
         self.words = []           # current sentence words, for sense choice
+        self.top = None           # the event the current line is about
 
     # ------------------------------------------------------------- words
     def word(self, lemma, cls, mods="", pos=None, only=None):
@@ -70,7 +71,14 @@ class Serializer:
                 quants.append((list(out), V[e.quant]))
             return out
         if e.kind == "coord":
-            return self.coordinated([self.np(m, quants) for m in e.members], e.logic)
+            out = self.coordinated([self.np(m, quants) for m in e.members], e.logic)
+            # modifiers of the whole group follow its last closing tag (SPEC rule 13)
+            for r in e.restrictors:
+                out += [tok("v", V["that"])] + self.clause(r) + [f"\\v{V['that']}"]
+            if e.possessor is not None:
+                p = self.np(e.possessor, quants)
+                out += [add_mods(p[0], "y")] + p[1:]
+            return out
         if e.kind == "pronoun":                          # unresolved and not handled by coref
             return ["n3t"]
         # a quantifier keeps "the": "all the dogs" (that group) is not "all dogs"
@@ -113,7 +121,7 @@ class Serializer:
         return 2 if kinds == {"num"} else 0 if kinds == {"adj"} else 1
 
     def attr(self, a):
-        if a.kind == "coord":                  # "cell and car numbers": v4 n#j 4 n#j 4
+        if a.kind == "coord":                  # "cell and car numbers": v4 n#j \v4 n#j \v4
             return self.coordinated([[t for x in member for t in self.attr(x)] for member in a.group], a.logic)
         if a.kind == "name":
             t = self.proper(a.lemma)
@@ -157,8 +165,12 @@ class Serializer:
 
     def core(self, ev, subj, obj, quants):
         s = self.np(subj, quants) if subj is not None else ["n3t"]
+        # a re-mention may go bare only inside its own noun phrase ("speakers [that are]
+        # in Slovakia"); split off as a sentence of its own it needs its "be":
+        # "the tower is at a height of 21.6 m", not "there is the tower at ..."
+        top_ref = ev is self.top and subj is not None and subj.ref is not None
         if ev.pred == "exist" and obj is None and not ev.pred_attrs and not ev.comps \
-                and not ev.mods and self.indefinite(subj):
+                and not ev.mods and self.indefinite(subj) and not top_ref:
             return s                                     # bare noun phrase: "there is a dog"
         vt = self.verb(ev)
         out = s + vt
@@ -223,4 +235,5 @@ class Serializer:
 
     def sentence(self, ev, words):
         self.words = words
+        self.top = ev
         return " ".join(self.clause(ev))

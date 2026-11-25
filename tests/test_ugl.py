@@ -441,3 +441,61 @@ def test_same_reading_treats_homonyms_as_equal():
     # n545 / n1188 are both written "end": the round trip cannot tell them apart
     assert U.same_reading(["n545t v1 a5"], ["n1188t v1 a5"])
     assert not U.same_reading(["n545t v1 a5"], ["n545t v1p a5"])        # tense is grammar
+
+
+def test_no_double_negation_or_degree_on_predicates():
+    # "not" / "more" on a predicate adjective belong to one place only
+    u = U.encode("Ferric minerals were not present.")[0]
+    assert "v1px" in u and not re.search(r"a\d+[a-z]*x", u), u
+    u = U.encode("She is more beautiful.")[0]
+    assert re.search(r"v1 a\d+r$", u) and "n7" not in u, u
+
+
+def test_lexical_comparatives_get_no_extra_degree():
+    # "later" is its own word (subsequently); "faster" is fast + r
+    assert not re.search(r"a\d+r$", U.encode("He later withdrew.")[0])
+    assert re.search(r"a\d+r$", U.encode("He ran faster.")[0])
+
+
+def test_comparatives_read_as_english():
+    for en, want in (("He ran faster.", "faster"), ("She is more beautiful.", "more beautiful"),
+                     ("The bigger dog barked.", "larger"), ("She spoke more carefully.", "more carefully")):
+        e = U.decode("\n".join(U.encode(en)))
+        assert want in e, (en, e)
+
+
+def test_clause_after_preposition_is_english():
+    e = U.decode("\n".join(U.encode("Hedgewar travelled across India to set up shakhas and inspire young people.")))
+    assert "across India to establish" in e and "for Hedgewar" not in e, e
+    e = U.decode("\n".join(U.encode("After matriculating, he went to Kolkata.")))
+    assert "after matriculating" in e, e
+
+
+def test_split_off_remention_keeps_be():
+    ls = U.encode("Access is from the third level of the tower, which is at a height of 21.6 meters.")
+    assert any(re.search(r"n\d+t v1 \\v32$", l) for l in ls), ls
+
+
+def test_relative_pronouns_for_people():
+    e = DEC.decode(r"n4834 v1 n152 v3 n152t v52 n4834 v143 n11602 \v52 \v3")
+    assert "with whom" in e, e
+
+
+def test_dates_without_year_take_on():
+    assert "On 11 March" in DEC.decode(r"#--03-11 v20 n4 v1424p n145s #2 \v20")
+
+
+def test_modifiers_after_a_group_belong_to_the_group():
+    # SPEC 13: "who served" is said of the writer AND the activist
+    u = U.encode("Elizabeth Rowley is a Canadian writer and political activist who served as the leader of the party.")[0]
+    # the clause follows the group's last closing tag, and its gap is the whole group
+    assert re.search(r"n\d+ a\d+ \\v4 v3 .*v4 n\d+t \\v4 n\d+t \\v4 v\d+p", u), u
+    e = U.decode(u)
+    assert "writer and political activist who served" in e or "author and political activist who served" in e, e
+    assert U.encode(e) == [u]
+
+
+def test_conjuncts_share_the_determiner():
+    u = U.encode("The realization requires the close involvement and cooperation of the knowing subject.")[0]
+    assert re.search(r"v4 n\d+t a\d+ \\v4 n\d+t \\v4", u), u
+    assert U.encode(U.decode(u)) == [u]

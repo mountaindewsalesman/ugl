@@ -315,6 +315,7 @@ class Analyzer:
             if t.deprel in ("dep", "orphan", "reparandum", "goeswith", "list"):
                 self.issues.append(f"'{t.form}' has no clear grammatical role ({t.deprel}); left out")
         self.relheads = {}                       # token index of a relative word -> its head entity
+        self.lifted = set()                      # dependents that modify a whole coordination (entity())
         roots = [t for t in self.toks if t.head < 0]
         if not roots:
             return None
@@ -351,7 +352,7 @@ class Analyzer:
         elif nominal:
             ev.pred, ev.lemma, ev.pos = "be", "be", (cop.i if cop is not None else v.i)
             if v.upos in ("ADJ", "ADV") or (v.upos == "VERB" and cop is not None):
-                ev.pred_attrs.append(self.attr(v))
+                ev.pred_attrs.append(self.attr(v, predicate=True))
             elif v.dep("case") and cop is not None:
                 # "John is in the house": be + relation
                 ev.pred = "exist"
@@ -518,6 +519,8 @@ class Analyzer:
             return                                     # used as the clause link (see link())
         if w in ("not", "n't", "never"):
             return                                     # handled in verb_mods
+        if w in DEGREE and head is not None and head.upos in ("ADJ", "ADV") and head.dep("cop"):
+            return                                     # "is more beautiful": a degree letter on the adjective (attr)
         if k.i in self.relheads and w in DEICTIC:     # "the place where I live": at <the place>
             ev.rels.append(Rel(DEICTIC[w][2], refer(self.relheads[k.i])))
             return
@@ -687,14 +690,22 @@ class Analyzer:
                 return True
         return False
 
-    def attr(self, t):
+    def attr(self, t, predicate=False):
+        """predicate: t heads its clause ("were not present"); its "not" is the
+        clause's negation (verb_mods), so it must not negate the adjective too."""
         mods = ""
         deg = t.f("Degree")
+        if t.lemma and t.lemma.lower() == t.lower:
+            # the comparison is the word's own meaning ("later" = subsequently),
+            # not an ending taken off it ("faster" = fast + r)
+            deg = None
         if deg == "Cmp":
             mods += "r"
         elif deg == "Sup":
             mods += "z"
         for a in t.dep("advmod"):
+            if predicate and a.lower in ("not", "n't", "never"):
+                continue
             mods += DEGREE.get(a.lower, "")
         lemma = t.lemma
         if t.upos == "VERB":       # participle as adjective: try the surface form first
@@ -724,8 +735,27 @@ class Analyzer:
         return [Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i)
                 for k in sorted(compound_chain(c), key=lambda x: x.i)]
 
+    LIFT = ("acl:relcl", "acl", "nmod", "appos")
+
+    def shared_modifiers(self, t):
+        """Dependents of the first conjunct that come after the last one: in
+        "a writer and activist who served ..." UD hangs "who served" on "writer",
+        but it is said of both (SPEC rule 13)."""
+        conj = [c for c in t.dep("conj") if c.upos in ("NOUN", "PROPN", "PRON", "NUM") and not c.dep("cop", "nsubj")]
+        if not conj:
+            return []
+        last = max(c.i for c in conj)
+        return [k for k in t.kids if k.i > last and k.deprel in self.LIFT]
+
     def entity(self, t):
-        return self.coordinate(t, self.head_entity(t))
+        late = self.shared_modifiers(t)
+        self.lifted |= {id(k) for k in late}
+        e = self.coordinate(t, self.head_entity(t))
+        if late:
+            self.lifted -= {id(k) for k in late}
+            # the group itself takes them (its re-mention is the gap of "who served")
+            self.np_mods(t, e, skip={id(k) for k in t.kids if k not in late})
+        return e
 
     def coordinate(self, t, e):
         """'X and Y': a coordination node around X; X keeps its identity, so its
@@ -735,6 +765,11 @@ class Analyzer:
             return e
         cc = next((g for c in conj for g in c.dep("cc")), None)
         members = [e] + [self.head_entity(c) for c in conj]
+        for m in members[1:]:
+            # "the involvement and cooperation": a conjunct with no determiner of its
+            # own shares the first one's definite / demonstrative determiner
+            if m.kind == "lex" and not m.det and not m.quant and e.det:
+                m.det = e.det
         return Entity("coord", members=members, logic=CC.get(cc.lower if cc else "and", "and"), pos=e.pos)
 
     QUANT_OF = {"all": "all", "each": "all", "both": "all", "every": "all", "most": "most",
@@ -878,7 +913,7 @@ class Analyzer:
 
     def np_mods(self, t, e, skip=()):
         for c in t.kids:
-            if id(c) in skip:
+            if id(c) in skip or (id(c) in self.lifted and e.kind != "coord"):
                 continue
             d = c.deprel
             if d in ("det", "det:predet"):

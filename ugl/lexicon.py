@@ -211,6 +211,11 @@ class Lexicon:
         # the commonest word (more senses goes with more use), then the shorter
         return max(cands, key=lambda x: (x[0], -len(x[1]), x[1]))[1]
 
+    def is_person_token(self, token):
+        """Does this concept token name a kind of person ("woman", "singer")?"""
+        e = self.entry(token)
+        return bool(e) and e.get("sense") in self.person
+
     def entry(self, token):
         m = WORD_RE.match(token)
         if not m:

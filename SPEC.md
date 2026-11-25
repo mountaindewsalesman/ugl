@@ -102,7 +102,8 @@ clause  := np V adv* [np] (clause \V)*      core:  subject verb adverbs object c
 np      := head mod*                        modifiers FOLLOW their head
          | L np \L np \L                     coordinated noun phrase, L = v4 (and) / v5 (or);
                                               as a possessor the y goes on L: v4y A \v4 B \v4
-mod     := a# | n#j | #num | v3 clause \v3 | possessor-np(y)   (possessor is always last)
+mod     := a# | n#j | #num | v3 clause \v3 | possessor-np(y)   (possessor is always last;
+                                              after a coordinated np only these two: rule 13)
          | L mod+ \L mod+ \L                coordinated modifiers (rule 10), L = v4 / v5
 ```
 
@@ -115,9 +116,9 @@ Rules:
 3. **Adverbs go between the verb and the object.** Adjectives follow their
    noun. So `n1 v_eat a_quick n_apple` = "eat quickly the apple", and
    `n1 v_eat n_apple a_quick` = "eat the quick apple". This is never ambiguous.
-4. **Prepositional phrases wrap the clause**, outermost first in sentence
-   order. This is your `nine has I ate \has`:
-   `#9 v20 n1 v_eat_p n_apple_t \v20`.
+4. **Prepositional phrases wrap the clause**: `#9 v20 n1 v_eat_p n_apple_t \v20`
+   = I ate the apple at nine. Several around one clause all modify it, so their
+   order carries no meaning and is canonical (rule 14), not the English order.
 5. **Subordinate clauses** use the clause form, with the subordinate clause
    first: `v7 <it rained> \v7 <I stayed> \v7` = I stayed because it rained.
 6. **Quantifiers scope explicitly** and repeat the noun:
@@ -154,3 +155,15 @@ Rules:
    stem is a noun but the word works as an adjective, it is that noun used as
    an attribute: anti-war = `n_war_ij`. A word the dictionary has whole
    ("antibody", "nonsense", "nontoxic") is never split.
+13. **Modifiers after a group belong to the group.** A relative clause, "of"
+   phrase or apposition after the closing tag of a coordinated noun phrase
+   modifies all of it: `v4 n_writer \v4 n_activist \v4 v3 v4 n_writer_t \v4
+   n_activist_t \v4 v_serve_p \v3` = a writer and activist who served (both
+   served). A modifier inside a member belongs to that member only. A later
+   member without its own determiner shares the first one's: "the leader and
+   founder" = the leader and the founder.
+14. **One spelling per meaning: canonical order.** Where English order carries
+   no meaning, UGL uses a fixed order: modifiers after their head go adjectives,
+   then attribute nouns and names, then numbers ("the 1902 plague epidemic" =
+   "the plague epidemic of 1902"); relations wrapped around one clause go by
+   relation number, then by their landmark's tokens.

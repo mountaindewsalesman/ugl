@@ -164,7 +164,7 @@ class Parser:
             # by a verb it is the subject ("John and Mary met")
             save = i
             try:
-                np, i = self.coord_np(i)
+                np, i = self.group_np(i)
             except ParseError:
                 np, i = None, save
         if np is None and x.kind == "word" and x.cls == "v" and x.idx in CLAUSE_FORM_VERBS:
@@ -262,10 +262,28 @@ class Parser:
         i = self.expect_close(i, x.idx, o)
         return NP(x, members=[a, b]), i
 
+    def group_np(self, i):
+        """A coordinated noun phrase with the modifiers of the whole group after
+        its closing tag (SPEC rule 13)."""
+        g, i = self.coord_np(i)
+        while i < self.n and not self.is_close(i):
+            y = parse_tok(self.t[i])
+            if y.kind == "word" and y.cls == "v" and y.idx == V["that"]:
+                o = i
+                c, i = self.clause(i + 1)
+                i = self.expect_close(i, V["that"], o)
+                g.rels.append(c)
+            elif "y" in y.mods and (y.cls in ("n", "nv") or (y.kind == "word" and y.idx in COORD_VERBS)):
+                g.poss, i = (self.group_np(i) if y.cls == "v" else self.np(i))
+                break
+            else:
+                break
+        return g, i
+
     def np(self, i):
         x = self.tokat(i)
         if x is not None and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
-            return self.coord_np(i)
+            return self.group_np(i)
         if not self.starts_np(i):
             raise ParseError(f"noun phrase expected at {i}: {self.peek(i)}")
         np = NP(parse_tok(self.t[i]))
@@ -287,7 +305,7 @@ class Parser:
                 np.poss, i = self.np(i)
                 break
             elif "y" in x.mods and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
-                np.poss, i = self.coord_np(i)              # v4y A \v4 B \v4 = of (A and B)
+                np.poss, i = self.group_np(i)              # v4y A \v4 B \v4 = of (A and B)
                 break
             elif x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
                 # right after a noun, and/or over modifiers only is a modifier group;
@@ -342,14 +360,25 @@ ADVERBIAL = {("n5", "q"), ("n5", "d"), ("n5", "e"), ("n6", "q"), ("n6", "d"), ("
              ("n7", "q"), ("n8", "q")}
 REL_WORD = {V["time"]: "at", V["cause"]: "because of", V["of"]: "of", V["by"]: "by",
             V["in front of"]: "in front of", V["out of"]: "out of"}
+# relations whose English word is a subordinating conjunction: a full clause may follow
+SUBORDINATORS = {V["before"], V["after"], V["until"], V["since"]}
 QUANT_WORD = {V["all"]: "every", V["most"]: "most", V["many"]: "many", V["few"]: "few"}
 RESERVED_NOUN_BASES = {f"n{i}" for i in RESERVED_NOUNS}
 # one-word pronouns that take their adjectives after them ("something new", "nobody else")
 FUSED = {"something", "nothing", "someone", "nobody", "what", "who"}
-# adverbs that are verb particles ("pick it up", "go away"): they follow the verb
-# and its object; every other adverb goes before the main verb ("often bore quotes")
-PARTICLES = {"up", "down", "out", "off", "in", "on", "away", "back", "over", "around", "about",
-             "through", "along", "aside", "forward", "apart", "together", "home", "by", "behind"}
+# Adverb position.  Before the main verb: -ly adverbs and the frequency / time /
+# focus words ("often bore quotes", "later withdrew", "also won"); between verb and
+# object they would read as part of the object.  Every other adverb - particles
+# ("pick it up"), flat adverbs ("ran fast", "worked harder") - follows the verb and
+# its object.
+PREVERBAL = {"often", "always", "never", "sometimes", "usually", "also", "still", "already",
+             "just", "later", "soon", "even", "only", "rarely", "seldom", "once", "again",
+             "first", "then", "now", "almost", "nearly", "eventually", "ever", "frequently"}
+
+
+def preverbal(w):
+    last = w.split()[-1]
+    return last.endswith("ly") or last in PREVERBAL
 VOWEL = re.compile(r"^[aeiou]", re.I)
 
 
@@ -441,12 +470,18 @@ class Decoder:
         if adverb and not self.is_adverb_sense(t):
             own = self.lex.surface(t.cls, t.idx, adverb=True) if t.kind == "word" else None
             w = own or adverb_form(w)               # "currently", not "presently" from "present"
-        if "r" in m:
-            f = inflect(w, "JJR") if not adverb else ""
-            w = f if f and f != w and " " not in w else "more " + w
-        if "z" in m:
-            f = inflect(w, "JJS") if not adverb else ""
-            w = f if f and f != w and " " not in w else "most " + w
+        base = self.lemma(t)
+        stem = base.lower()[:-1] if base.lower().endswith("e") and not base.lower().endswith("ee") else base.lower()
+        syll = len(re.findall(r"[aeiouy]+", stem))       # a final silent e is no syllable: large, simple
+        # English compares short words with an ending: one syllable, or two ending in -y
+        short = " " not in base and (syll <= 1 or (syll == 2 and base.endswith("y") and not adverb))
+        for letter, tag, word in (("r", "JJR", "more"), ("z", "JJS", "most")):
+            if letter in m:
+                # "bigger", "faster" (an adverb compares like its short adjective);
+                # long words and -ly adverbs take more / most: "more carefully"
+                f = inflect(base, tag) if short else ""
+                ok = f and f != base and " " not in f
+                w = f if ok else f"{word} {w}"
         if "l" in m:
             w = "less " + w
         if "w" in m:
@@ -505,11 +540,27 @@ class Decoder:
             word = "or" if h.idx == V["or"] else "and"
             quant = ctx.quant.pop(h.base, None) if h.base in ctx.quant else None
             parts = [self.np(m, ctx, case if case != "poss" else "obj") for m in np.members]
+            if np.rels or np.poss is not None:
+                # a group with its own modifiers says its determiner once ("a writer and
+                # political activist who ..."); a repeated one would split the group
+                lead = re.match(r"(the|an?|these|those|this|that) ", parts[0])
+                for k in range(1, len(parts)):
+                    m = re.match(r"(the|an?|these|those|this|that) ", parts[k])
+                    if lead and m and (m.group(1) == lead.group(1) or {m.group(1), lead.group(1)} <= {"a", "an"}):
+                        parts[k] = parts[k][m.end():]
             s = f" {word} ".join(parts)
             if quant in ("every", "all"):                # "all of (cats and dogs)" = both cats and dogs
                 s = ("both " if len(parts) == 2 and word == "and" else "all of ") + s
             elif quant:
                 s = f"{quant} of {s}"
+            if np.poss is not None:                      # "the leader and founder of the party"
+                s += " of " + self.np(np.poss, ctx, "obj")
+            for r in np.rels:                            # "a writer and activist who served"
+                sub = Ctx()
+                sub.gap = h.base
+                person = all(m.head.kind == "name" or self.lex.is_person_token(m.head.raw) for m in np.members)
+                sub.gap_word = "who" if person else "that"
+                s += " " + self.clause(r, sub)
             return s + "'s" if case == "poss" else s
         if h.kind == "word" and h.cls == "n" and h.idx in RESERVED_NOUNS:
             key = pron_key(h.base, h.mods)
@@ -593,7 +644,8 @@ class Decoder:
         for r in np.rels:
             sub = Ctx()
             sub.gap = h.base
-            sub.gap_word = "who" if h.kind == "name" or self.lex.is_proper(h.raw) else "that"
+            person = h.kind == "name" or self.lex.is_proper(h.raw) or (h.kind == "word" and self.lex.is_person_token(h.raw))
+            sub.gap_word = "who" if person else "that"
             words.append(self.clause(r, sub))
         s = " ".join(w for w in words if w)
         if case == "poss":
@@ -705,16 +757,67 @@ class Decoder:
             return f"when {a}, {b}"
         if r == V["during"]:
             return f"while {a}, {b}"
-        if isinstance(c.a, Core) and isinstance(c.b, Core) and c.a.subj.head.base == c.b.subj.head.base:
-            a = self.core(c.a, ctx, gerund=True)
         prep = REL_WORD.get(r, name)
+        if r in SUBORDINATORS:                         # "after he left": a clause can follow
+            if self.same_subject(c.a, c.b):
+                a = self.gerund(c.a, ctx)              # "after matriculating"
+            return f"{b} {prep} {a}"
+        # a preposition takes no finite clause ("for he establishes" is not English):
+        # same subject -> "to establish" (purpose) / "by sampling"; another subject ->
+        # "for X to establish" / "with the group keeping the name"
+        if self.same_subject(c.a, c.b):
+            if r == V["for"] and self.infinitival_body(c.a):
+                return f"{b} {self.infinitive(c.a, ctx)}"
+            return f"{b} {prep} {self.gerund(c.a, ctx)}"
+        subj = self.core_of(c.a)
+        if subj is not None and self.infinitival_body(c.a):
+            who = self.np(subj.subj, ctx, "obj")
+            if r == V["for"]:
+                return f"{b} for {who} {self.infinitive(c.a, ctx)}"
+            return f"{b} {prep} {who} {self.gerund(c.a, ctx)}"
         return f"{b} {prep} {a}"
+
+    @staticmethod
+    def core_of(x):
+        """The core clause at the bottom of relation wrappers / the first of a coordination."""
+        while isinstance(x, (Wrap, Logic)):
+            x = x.body if isinstance(x, Wrap) else x.a
+        return x if isinstance(x, Core) else None
+
+    def same_subject(self, a, b):
+        """Every clause in a (a coordination too) has b's subject."""
+        cb = self.core_of(b)
+        if cb is None:
+            return False
+        if isinstance(a, Logic) and a.rel.idx in COORD_VERBS:
+            return self.same_subject(a.a, b) and self.same_subject(a.b, b)
+        ca = a if isinstance(a, Core) else None
+        return ca is not None and ca.subj.head.base == cb.subj.head.base
+
+    def infinitival_body(self, a):
+        """Can a be said without tense ("to set up X and inspire Y")?"""
+        if isinstance(a, Logic) and a.rel.idx in COORD_VERBS:
+            return self.infinitival_body(a.a) and self.infinitival_body(a.b)
+        return isinstance(a, Core) and not a.verb.mods.replace("x", "")
+
+    def gerund(self, a, ctx):
+        if isinstance(a, Logic) and a.rel.idx in COORD_VERBS:
+            word = "or" if a.rel.idx == V["or"] else "and"
+            return f"{self.gerund(a.a, ctx)} {word} {self.gerund(a.b, ctx)}"
+        if isinstance(a, Core):
+            return self.core(a, ctx, gerund=True)
+        return self.clause(a, ctx)
 
     def wrap(self, c, ctx, question=False):
         r = c.rel.idx
         if VERB_KIND.get(r) == "quant":
             ctx.quant[c.land.head.base] = QUANT_WORD[r]
             return self.clause(c.body, ctx, question)
+        if isinstance(c.body, Logic) and c.body.rel.idx not in COORD_VERBS and VERB_KIND.get(c.body.rel.idx) == "rel":
+            # a relation around "B for A" modifies the main event B: "moved across India
+            # to set up shakhas", not "... to set up shakhas across India"
+            inner = c.body
+            return self.logic(Logic(inner.rel, inner.a, Wrap(c.land, c.rel, inner.b)), ctx)
         key = (c.land.head.base, "".join(x for x in c.land.head.mods if x in "qde"))
         if key in ADVERBIAL:
             word = SPECIAL[key]
@@ -727,7 +830,8 @@ class Decoder:
             return f"{advs}, {self.clause(c.body, ctx, question)}"
         if self.matches(c.land, ctx.gap):          # "the house in which I live"
             inner = self.clause(c.body, Ctx(), question)
-            return f"{self.preposition(c)} which {inner}"
+            pron = "whom" if ctx.gap_word == "who" else "which"   # "a woman with whom he writes"
+            return f"{self.preposition(c)} {pron} {inner}"
         rel = self.relation(c, ctx)
         body = self.clause(c.body, ctx, question)
         core = c.body
@@ -742,9 +846,10 @@ class Decoder:
     def preposition(self, c):
         r = c.rel.idx
         prep = REL_WORD.get(r, RESERVED_VERBS[r][0])
-        if r == V["time"] and c.land.head.kind == "num" and re.fullmatch(r"#\d{3,4}(-\d\d)?(-\d\d)?", c.land.head.raw):
-            # calendar landmarks: "in 2017", "in June 1944", "on 21 June 1940"
-            prep = "on" if c.land.head.raw.count("-") == 2 else "in"
+        m = re.fullmatch(r"#(\d{3,4}|-)((?:-\d\d){0,2})", c.land.head.raw) if c.land.head.kind == "num" else None
+        if r == V["time"] and m:
+            # calendar landmarks: "in 2017", "in June 1944", "on 21 June 1940", "on 11 March"
+            prep = "on" if m.group(2).count("-") == 2 else "in"
         if "x" in c.rel.mods:
             prep = {"with": "without", "like": "unlike"}.get(prep, "not " + prep)
         return prep
@@ -796,10 +901,12 @@ class Decoder:
         if not copula and after:
             # English puts an adverb before the main verb ("his letters often bore
             # quotes"); between verb and object it reads as part of the object
-            early = [w for w in advs if w not in PARTICLES]
-            late = [w for w in advs if w in PARTICLES]
+            early = [w for w in advs if preverbal(w)]
+            late = [w for w in advs if not preverbal(w)]
             after = after[:-1] + early + after[-1:]
-        parts = before + [subj] + after + late + [obj] + comps
+        particles = [w for w in late if w in ("up", "down", "out", "off", "away", "back", "over", "in", "on")]
+        late = [w for w in late if w not in particles]
+        parts = before + [subj] + after + particles + [obj] + late + comps
         s = " ".join(p for p in parts if p)
         if obj_gap:
             s = f"{ctx.gap_word} {s}"
