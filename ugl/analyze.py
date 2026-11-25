@@ -223,6 +223,20 @@ def name_parts(t):
     return out
 
 
+def name_span(t):
+    """Every word of the name headed by t, in order: its flat / compound name
+    words and capitalised adjectives inside it ("New Testament", "Riverside High
+    School", "National Collegiate Athletic Association")."""
+    parts = name_parts(t)
+    idx = {p.i for p in parts} | {t.i}
+    for p in [t] + parts:                        # a capitalised adjective right before a name word: "United"
+        for c in p.dep("amod"):
+            if c.form[:1].isupper() and c.i + 1 in idx and c not in parts:
+                parts.append(c)
+                idx.add(c.i)
+    return sorted(parts + [t], key=lambda x: x.i)
+
+
 def compound_chain(c):
     """c with the compound / adjective modifiers stacked on it ("glass" in
     "glass transition temperature")."""
@@ -728,8 +742,9 @@ class Analyzer:
     def compound_attrs(c):
         """A compound modifier: a name, a number, or a noun with its own compounds
         before it (glass -> transition -> temperature)."""
-        if c.upos == "PROPN":
-            return [Attr(c.form, "name", "", c.i)]
+        if c.upos == "PROPN":                    # the whole name: "New Testament manuscripts"
+            span = name_span(c)
+            return [Attr(" ".join(x.form for x in span), "name", "", c.i, parts=[x.i for x in span])]
         if c.upos == "NUM":
             return [Attr(number_literal(c), "num", "", c.i)]
         return [Attr(k.lemma, "noun" if k.upos != "ADJ" else "adj", "", k.i)
@@ -823,11 +838,8 @@ class Analyzer:
             self.np_mods(t, e, skip=set(id(p) for p in parts))
             return e
         if t.upos == "PROPN":
-            parts = name_parts(t)
-            idx = {p.i for p in parts} | {t.i}
-            for p in [t] + parts:                # a capitalised adjective right before a name word: "United"
-                parts += [c for c in p.dep("amod") if c.form[:1].isupper() and c.i + 1 in idx and c not in parts]
-            span = sorted(parts + [t], key=lambda x: x.i)
+            span = name_span(t)
+            parts = [x for x in span if x is not t]
             text = " ".join(x.form for x in span)
             known = self.lex.name_is_person(text)
             e = Entity("name", text, pos=t.i, is_person=bool(known), animate=known,
@@ -947,12 +959,26 @@ class Analyzer:
             elif d == "nummod":
                 for a in c.dep("advmod"):              # "about 100", "nearly 50": kept as an adverb
                     e.attrs.append(self.attr(a))
+                end = self.range_end(c)
+                if end is not None:                    # "40–60 days": a range is a group joined by "to"
+                    num = lambda k: [Attr(number_literal(k, number_parts(k)), "num", "", k.i,
+                                          parts=[p.i for p in number_parts(k)])]
+                    e.attrs.append(Attr("", "coord", group=[num(c), num(end)], logic="to"))
+                    continue
                 group = self.modifiers(c, ("NUM",), lambda k: [Attr(number_literal(k, number_parts(k)), "num", "", k.i)])
                 if group[0].kind == "coord":           # "two or three days"
                     e.attrs += group
                 else:
                     e.count = number_literal(c, number_parts(c))
                     e.parts += [c.i] + [p.i for p in number_parts(c)]   # said: the coverage check sees it
+            elif d == "compound" and c.upos == "NOUN" and c.dep("nummod") and not c.dep("conj"):
+                # "a 2-year contract" = a contract of 2 years (one spelling for both)
+                counted = self.head_entity(c)
+                counted.plural = counted.count not in (None, "#1")
+                if e.possessor is None:
+                    e.possessor = counted
+                else:
+                    e.restrictors.append(Event(pred="exist", subj=refer(e), rels=[Rel("of", counted)]))
             elif d == "compound":
                 if c.upos in ("PROPN", "NUM", "NOUN", "ADJ", "X"):   # "cell and car numbers"
                     e.attrs += self.modifiers(c, ("PROPN", "NUM", "NOUN", "ADJ", "X"), self.compound_attrs)
@@ -980,6 +1006,15 @@ class Analyzer:
             elif d == "acl":
                 e.restrictors.append(self.participle(c, e))
                 e.restrictors[-1].aside = self.after_comma(c)
+
+    @staticmethod
+    def range_end(c):
+        """The second number of a range hanging off number c: "40–60", "18 to 24"."""
+        for k in c.kids:
+            if k.upos == "NUM" and k.deprel in ("nmod", "conj", "nummod", "dep") \
+                    and any(x.lower in ("–", "-", "—", "to", "through") for x in k.kids):
+                return k
+        return None
 
     def after_comma(self, c):
         """Is phrase c set off by a comma right before it ("my mother, who lives

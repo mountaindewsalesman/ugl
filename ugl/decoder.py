@@ -248,7 +248,15 @@ class Parser:
         i = self.expect_close(i, x.idx, o)
         b, i = self.mod_run(i)
         i = self.expect_close(i, x.idx, o)
+        if x.idx == V["to"] and not all(len(m) == 1 and getattr(m[0], "kind", "") == "num" for m in (a, b)):
+            raise ParseError(f"a range joins two numbers ({o})")
         return Group(x, [a, b]), i
+
+    def starts_range(self, i):
+        """v51 #a \\v51 #b \\v51 right after a noun: a range of numbers ("40 to 60 days")."""
+        x, y = self.tokat(i), self.tokat(i + 1)
+        return x is not None and x.kind == "word" and x.cls == "v" and x.idx == V["to"] \
+            and "y" not in x.mods and y is not None and y.kind == "num" and self.peek(i + 2) == f"\\v{V['to']}"
 
     def clause_form_start(self, i):
         x = self.tokat(i)
@@ -307,7 +315,7 @@ class Parser:
             elif "y" in x.mods and x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
                 np.poss, i = self.group_np(i)              # v4y A \v4 B \v4 = of (A and B)
                 break
-            elif x.kind == "word" and x.cls == "v" and x.idx in COORD_VERBS:
+            elif x.kind == "word" and x.cls == "v" and (x.idx in COORD_VERBS or self.starts_range(i)):
                 # right after a noun, and/or over modifiers only is a modifier group;
                 # anything else (a coordinated clause or noun phrase) ends the noun phrase
                 opened = dict(self.opener)
@@ -503,6 +511,8 @@ class Decoder:
         if isinstance(x, NP):
             x = x.head
         if isinstance(x, Group):
+            if x.rel.idx == V["to"]:                     # a range: "40 to 60"
+                return " to ".join(self.mod_text(m[0], adverb) for m in x.members)
             word = "or" if x.rel.idx == V["or"] else "and"
             parts = []
             for i, m in enumerate(x.members):

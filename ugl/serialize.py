@@ -190,7 +190,7 @@ class Serializer:
     @staticmethod
     def coordinated(parts, logic="and"):
         """Coordinated noun phrase: v4 A \\v4 B \\v4  (nested for 3+ members)."""
-        i = V["or"] if logic == "or" else V["and"]
+        i = V[logic] if logic in ("or", "to") else V["and"]     # "to": a range of numbers
         out = parts[-1]
         for p in reversed(parts[:-1]):
             out = [tok("v", i)] + p + [f"\\v{i}"] + out + [f"\\v{i}"]

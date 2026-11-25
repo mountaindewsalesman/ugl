@@ -28,6 +28,7 @@ def positions(ev, out=None):
         for a in (x for at in e.attrs for x in at.leaves()):
             if a.pos is not None:
                 out.add(a.pos)
+            out.update(a.parts)
         for m in e.members:
             ent(m)
         ent(e.possessor)            # (a re-mention's antecedent is said elsewhere: not followed)

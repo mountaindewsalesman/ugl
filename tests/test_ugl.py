@@ -499,3 +499,20 @@ def test_conjuncts_share_the_determiner():
     u = U.encode("The realization requires the close involvement and cooperation of the knowing subject.")[0]
     assert re.search(r"v4 n\d+t a\d+ \\v4 n\d+t \\v4", u), u
     assert U.encode(U.decode(u)) == [u]
+
+
+def test_name_modifiers_keep_every_word():
+    for en, name in (("The Riverside High School mascot is Cyclones.", "Riverside_High_School"),):
+        ls = lines(en)
+        assert name in ls[0].ugl and not any("dropped" in i for i in ls[0].issues), ls
+
+
+def test_number_ranges_and_counted_compounds():
+    ls = lines("Sprouting occurs within 40–60 days.")
+    assert "v51 #40" in ls[0].ugl and not any("dropped" in i for i in ls[0].issues), ls
+    assert "40 to 60" in U.decode(ls[0].ugl)
+    ls = lines("Obukhov signed a 2-year contract.")
+    assert "y #2" in ls[0].ugl and not any("dropped" in i for i in ls[0].issues), ls
+    for l in ("Sprouting occurs within 40–60 days.", "Obukhov signed a 2-year contract."):
+        a = U.encode(l)
+        assert U.encode(U.decode("\n".join(a))) == a
