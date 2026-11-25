@@ -119,6 +119,10 @@ def main():
     if a.second_parser and not a.single_parser and os.path.abspath(a.second_parser) != os.path.abspath(a.parser or DEFAULT_PATH):
         u.encoder.second_parser = ParserModel(a.second_parser)
     os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, "run.json"), "w", encoding="utf-8") as f:
+        # what this build reads (tools/corpus_monitor.py estimates time left from it)
+        json.dump({"files": [os.path.abspath(p) for p in a.files], "max_sents": a.max_sents,
+                   "started": __import__("time").time()}, f, indent=1)
     fu = open(os.path.join(a.out, "ugl.txt"), "w", encoding="utf-8", buffering=1)
     fe = open(os.path.join(a.out, "english.txt"), "w", encoding="utf-8", buffering=1)
     fr = open(os.path.join(a.out, "rejected.tsv"), "w", encoding="utf-8", buffering=1)

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UGL Corpus Build</title>
+<meta name="description" content="Live progress of the UGL / English training corpus build: sentence pairs, words, rate, and the latest translated sentences.">
+<link rel="stylesheet" href="style.css">
+<style>
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 0 0 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; }
+  .stat .k { color: var(--muted); font-size: 0.82rem; }
+  .stat .v { font-size: 1.5rem; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .stat .s { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+  table.builds { width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  table.builds th, table.builds td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.builds th:first-child, table.builds td:first-child { text-align: left; }
+  .tablewrap { overflow-x: auto; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.on { background: var(--n); }
+  .pair { border-top: 1px solid var(--line); padding: 10px 0; }
+  .pair:first-child { border-top: 0; }
+  .pair .src { font-size: 0.95rem; }
+  .pair .ugl { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); word-break: break-word; margin: 4px 0; }
+  .pair .back { font-size: 0.9rem; color: var(--l); }
+  .pair .tag { font-size: 0.75rem; color: var(--muted); }
+  svg.chart { width: 100%; height: 180px; display: block; }
+  svg.chart .grid { stroke: var(--line); stroke-width: 1; }
+  svg.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+  svg.chart .area { fill: var(--accent-soft); }
+  svg.chart text { fill: var(--muted); font-size: 11px; font-family: var(--sans); }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>UGL corpus build</h1>
+  <p class="lede">English sentences encoded into UGL on the build machine; only sentences that pass every
+    quality check are kept as training pairs. This page refreshes every minute
+    (<a href="./">playground</a>).</p>
+  <p id="status" class="hint">Loading...</p>
+</header>
+<main class="wrap">
+  <div class="stats" id="stats"></div>
+  <section class="panel" aria-labelledby="g-h">
+    <h2 id="g-h">English words kept over time</h2>
+    <div id="chart"></div>
+  </section>
+  <section class="panel" aria-labelledby="b-h">
+    <h2 id="b-h">Builds</h2>
+    <div class="tablewrap"><table class="builds" id="builds"></table></div>
+  </section>
+  <section class="panel" aria-labelledby="r-h">
+    <h2 id="r-h">Latest kept sentences</h2>
+    <p class="hint">Source English, its UGL, and the decoder's English for that UGL.</p>
+    <div id="recent"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const URL_ = "https://raw.githubusercontent.com/mountaindewsalesman/ugl/corpus-stats/stats.json";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => n == null ? "–" : Math.round(n).toLocaleString();
+const big = (n) => n == null ? "–" : n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "k" : fmt(n);
+const hours = (h) => h == null ? "–" : h < 1 ? Math.round(h * 60) + " min" : h.toFixed(1) + " h";
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function stat(k, v, s) {
+  const d = el("div", "stat");
+  d.append(el("div", "k", k), el("div", "v", v));
+  if (s) d.append(el("div", "s", s));
+  return d;
+}
+
+function chart(history) {
+  const box = $("chart");
+  box.replaceChildren();
+  if (!history || history.length < 2) { box.append(el("p", "hint", "The chart starts after the second update.")); return; }
+  const W = 640, H = 180, L = 52, B = 22, T = 8, R = 8;
+  const t0 = history[0].t, t1 = history[history.length - 1].t;
+  const ymax = Math.max(...history.map((h) => h.english_words)) || 1;
+  const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+  const y = (v) => H - B - (v / ymax) * (H - B - T);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "chart");
+  svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `English words kept: ${fmt(ymax)} so far`);
+  const add = (name, attrs, text) => { const e = document.createElementNS(ns, name); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text) e.textContent = text; svg.append(e); return e; };
+  for (const f of [0, 0.5, 1]) {
+    add("line", { x1: L, x2: W - R, y1: y(ymax * f), y2: y(ymax * f), class: "grid" });
+    add("text", { x: L - 6, y: y(ymax * f) + 4, "text-anchor": "end" }, big(ymax * f));
+  }
+  const pts = history.map((h) => `${x(h.t).toFixed(1)},${y(h.english_words).toFixed(1)}`);
+  add("path", { d: `M${x(t0)},${y(0)} L${pts.join(" L")} L${x(t1)},${y(0)} Z`, class: "area" });
+  add("path", { d: `M${pts.join(" L")}`, class: "line" });
+  const when = (t) => new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  add("text", { x: L, y: H - 4 }, when(t0));
+  add("text", { x: W - R, y: H - 4, "text-anchor": "end" }, when(t1));
+  box.append(svg);
+}
+
+function render(s) {
+  const age = Math.round((Date.now() / 1000 - s.updated) / 60);
+  $("status").textContent = `Updated ${age <= 0 ? "just now" : age + " min ago"} · ${s.running} of ${s.builds.length} builds running` +
+    (age > 25 ? " · no update for a while: the build machine may be off or the monitor stopped" : "");
+  const t = s.totals;
+  $("stats").replaceChildren(
+    stat("Sentence pairs kept", big(t.kept), `${(100 * t.kept / Math.max(1, t.seen)).toFixed(1)}% of ${big(t.seen)} read`),
+    stat("English words", big(t.english_words), s.words_per_hour ? `${big(s.words_per_hour)} / hour` : "rate after an hour"),
+    stat("UGL tokens", big(t.ugl_tokens), `${(t.ugl_tokens / Math.max(1, t.english_words)).toFixed(2)} per English word`),
+    stat("Pairs per hour", s.kept_per_hour ? big(s.kept_per_hour) : "–", "over the last hour"),
+    stat("Time left", hours(s.eta_hours), "until the last build finishes"),
+  );
+  chart(s.history);
+  const tb = $("builds");
+  tb.replaceChildren();
+  const head = el("tr");
+  for (const h of ["Build", "Kept", "Read", "Kept %", "English words", "Progress", "Time left"]) head.append(el("th", null, h));
+  tb.append(head);
+  for (const b of s.builds) {
+    const tr = el("tr");
+    const name = el("td"); const dot = el("span", "dot" + (b.running ? " on" : "")); name.append(dot, b.name);
+    tr.append(name, el("td", null, fmt(b.kept)), el("td", null, fmt(b.seen)),
+      el("td", null, (100 * b.kept / Math.max(1, b.seen)).toFixed(1) + "%"), el("td", null, fmt(b.english_words)),
+      el("td", null, b.total ? (100 * b.seen / b.total).toFixed(1) + "%" : "–"),
+      el("td", null, b.running ? hours(b.eta_hours) : "done"));
+    tb.append(tr);
+  }
+  const rec = $("recent");
+  rec.replaceChildren();
+  for (const p of (s.recent || []).slice().reverse()) {
+    const d = el("div", "pair");
+    d.append(el("div", "tag", p.build));
+    p.english.forEach((e, i) => {
+      d.append(el("div", "src", e), el("div", "ugl", p.ugl[i] || ""));
+      if (p.decoded && p.decoded[i]) d.append(el("div", "back", "→ " + p.decoded[i]));
+    });
+    rec.append(d);
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch(URL_ + "?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+  } catch (e) {
+    $("status").textContent = "Could not load the build stats (" + e.message + "). The monitor may not have published yet.";
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
