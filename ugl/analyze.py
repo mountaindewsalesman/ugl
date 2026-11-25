@@ -409,14 +409,18 @@ class Analyzer:
                    for t in self.toks)
 
     # =============================================================== clause
-    def clause(self, v, inherit_subj=None):
-        """Build the Event headed by token v (a verb, or a nominal/adjectival predicate)."""
+    def clause(self, v, inherit_subj=None, patient=None):
+        """Build the Event headed by token v (a verb, or a nominal/adjectival predicate).
+        patient: for a passive participle, the noun it describes ("a boy named Tom":
+        the boy is named), set as the object before any complement reads it."""
         cop = v.dep1("cop")
         ev = Event(pred="verb", lemma=v.lemma, pos=v.i)
         passive = bool(v.dep("aux:pass", "nsubj:pass", "csubj:pass", "obl:agent"))
         if (not passive and v.xpos == "VBN" and v.deprel in ("advcl", "acl") and inherit_subj is not None
                 and not v.dep("aux", "nsubj", "expl", "csubj", "obj")):
             passive = True                       # "flows if heated": the subject is what gets heated
+        if patient is not None and v.xpos == "VBN" and not v.dep("aux", "nsubj", "expl", "csubj", "obj"):
+            passive = True                       # "a boy named Tom", "particles released from rain"
         ev.passive = passive
 
         # ---- predicate type
@@ -455,12 +459,12 @@ class Analyzer:
         ev.mods += self.verb_mods(v, cop, passive)
 
         # ---- subject and object (a fragment's phrase is its subject already)
-        agent = None if fragment else self.arguments(v, ev, nominal, passive, inherit_subj, loose_prt)
+        agent = None if fragment else self.arguments(v, ev, nominal, passive, inherit_subj, loose_prt, patient)
         # ---- adverbials, relations, subordinate clauses, complements, coordination
         self.dependents(v, ev, agent)
         return ev
 
-    def arguments(self, v, ev, nominal, passive, inherit_subj, loose_prt):
+    def arguments(self, v, ev, nominal, passive, inherit_subj, loose_prt, patient=None):
         """Subject, object, indirect object and particle of clause head v.
         -> the passive agent's token (its "by" phrase is the subject, not a relation)."""
         subj = v.dep1("nsubj", "csubj", "expl")
@@ -474,6 +478,7 @@ class Analyzer:
                 ev.comps.append(self.clause(psubj))
             else:
                 ev.obj = (self.entity(psubj) if psubj is not None
+                          else refer(patient) if patient is not None
                           else refer(inherit_subj) if inherit_subj is not None else ev.obj)
             ev.subj = self.entity(agent) if agent is not None else (inherit_subj and Entity("reserved", "n4")) or Entity("reserved", "n4")
         elif subj is not None and subj.deprel == "expl":
@@ -599,8 +604,10 @@ class Analyzer:
             return                                     # used as the clause link (see link())
         if w in ("not", "n't", "never"):
             return                                     # handled in verb_mods
-        if w in DEGREE and head is not None and head.upos in ("ADJ", "ADV") and head.dep("cop"):
-            return                                     # "is more beautiful": a degree letter on the adjective (attr)
+        if w in DEGREE and head is not None and head.upos in ("ADJ", "ADV"):
+            # "is more beautiful", "felt very happy", "looked very nice": a degree
+            # letter on the adjective predicate (attr), not also an adverb of the clause
+            return
         if k.i in self.relheads and w in DEICTIC:     # "the place where I live": at <the place>
             ev.rels.append(Rel(DEICTIC[w][2], refer(self.relheads[k.i])))
             return
@@ -1099,7 +1106,7 @@ class Analyzer:
 
     def participle(self, c, head):
         """acl / participial amod: 'the man sitting there', 'particles released from rain'."""
-        ev = self.clause(c)
+        ev = self.clause(c, patient=head if c.xpos == "VBN" else None)
         r = refer(head)
         if c.xpos == "VBN":                       # passive participle: head is the object
             if ev.obj is None:

@@ -7,8 +7,9 @@ Writes:
     corpus/ugl.txt        one clean UGL line per line (training data)
     corpus/english.txt    the English sentence each clean line came from
     corpus/rejected.tsv   flagged sentences: English \t issues   (to inspect / fix)
-    corpus/passages.jsonl runs of consecutive kept sentences from one paragraph,
-                          {"source", "title", "english": [...], "ugl": [...]}:
+    corpus/passages.jsonl runs of consecutive kept sentences from one document,
+                          {"source", "title", "english": [...], "ugl": [...],
+                           "paragraph": [paragraph number of each sentence]}:
                           connected text for language-model training (a rejected
                           sentence ends a run, so no passage jumps over a gap)
 and prints how many sentences were kept and why the others were rejected.
@@ -46,7 +47,9 @@ Two ways to decide (see ugl.encoder.Encoder.encode_lines for the issues):
 Garbage in, garbage out: a smaller clean corpus beats a larger dirty one.
 """
 import argparse
+import bisect
 import collections
+import itertools
 import json
 import os
 import re
@@ -124,29 +127,41 @@ def main():
     passages = kept = seen = 0
     why = collections.Counter()
 
-    def paragraph_units():
-        """(source, title, paragraph) for every paragraph worth encoding; the
-        source is the folder the file sits in (scripts/fetch_sources.py)."""
+    def document_units():
+        """(source, title, paragraphs) per document; the source is the folder
+        the file sits in (scripts/fetch_sources.py).  A paragraph is kept when it
+        ends like a sentence or is long (short unpunctuated lines are headings);
+        '"Yes!" said Tom.' is a sentence, "Early life" is not."""
         for path in a.files:
             source = os.path.basename(os.path.dirname(os.path.abspath(path)))
             for title, text in documents([path]):
-                for para in paragraphs(text):
-                    if len(para) >= 40:
-                        yield source, title, para
+                paras = [p for p in paragraphs(text) if len(p) >= 40 or re.search(r"[.!?][\"'”’)]*$", p)]
+                if paras:
+                    yield source, title, paras
 
-    for source, title, para in paragraph_units():
-        # one paragraph at a time: pronouns refer back within it, or to the title
-        by_src = collections.OrderedDict()
-        for line in u.encode_lines(para, topic=title, roundtrip=not a.no_roundtrip):
-            by_src.setdefault(line.source, []).append(line)
-        items = list(by_src.items())
+    for source, title, paras in document_units():
+        # the whole document at once, so pronouns refer back across paragraphs
+        # ("Lily went to the park.\nShe saw a dog."); every paragraph break ends a sentence
+        text = "\n".join(paras)
+        starts = [0]
+        for p in paras[:-1]:
+            starts.append(starts[-1] + len(p) + 1)
+        # lines of one sentence are consecutive; group by position, not by text, so
+        # two identical sentences ("Yes!") stay two
+        items, cursor = [], 0
+        for src, group in itertools.groupby(u.encode_lines(text, topic=title, roundtrip=not a.no_roundtrip),
+                                            key=lambda l: l.source):
+            at = text.find(src, cursor)
+            if at >= 0:
+                cursor = at + len(src)
+            items.append((src, list(group), bisect.bisect_right(starts, max(at, cursor - 1)) - 1))
         if a.max_sents:
             items = items[: max(0, a.max_sents - seen)]
         scores = [None] * len(items)
         if grader:
-            # one batch per paragraph: every sentence without a broken piece
+            # one batch per document: every sentence without a broken piece
             rows, at = [], []
-            for n, (src, lines) in enumerate(items):
+            for n, (src, lines, _) in enumerate(items):
                 kinds = sorted({kind(i) for l in lines for i in l.issues})
                 if set(kinds) & HARD:
                     continue
@@ -160,7 +175,7 @@ def main():
             for n, sc in zip(at, grader.score(rows) if rows else []):
                 scores[n] = sc
         runs, run = [], []
-        for (src, lines), sc in zip(items, scores):
+        for (src, lines, para), sc in zip(items, scores):
             seen += 1
             issues = [i for l in lines for i in l.issues if kind(i) not in a.allow]
             if grader:
@@ -181,12 +196,13 @@ def main():
                 fe.write(eng + "\n")
                 if fs:
                     fs.write(f"{sc:.4f}\n")
-                run.append((eng, code, sc))
+                run.append((eng, code, sc, para))
         for r in runs + [run]:
             if r:
-                p = {"source": source, "title": title, "english": [e for e, _, _ in r], "ugl": [c for _, c, _ in r]}
+                p = {"source": source, "title": title, "english": [x[0] for x in r], "ugl": [x[1] for x in r],
+                     "paragraph": [x[3] for x in r]}     # paragraph number of each sentence in its document
                 if grader:
-                    p["scores"] = [round(x, 4) for _, _, x in r]
+                    p["scores"] = [round(x[2], 4) for x in r]
                 fp.write(json.dumps(p, ensure_ascii=False) + "\n")
                 passages += 1
         if a.max_sents and seen >= a.max_sents:

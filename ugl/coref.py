@@ -18,6 +18,7 @@ QUANTIFIER = {"both", "all", "each", "most", "many", "few"}     # "both are smel
 REFLEXIVE = {"himself", "herself", "itself", "themselves"}
 RELATIVE = {"who", "whom", "which", "that", "whose"}
 WINDOW = 2
+ANAPHORIC = PERSONAL | NEUTER | PLURAL      # pronouns that refer back to something said
 MALE_PRONOUNS = {"he", "him", "his", "himself"}
 # person nouns whose gender is part of the word: "her brother ... she" cannot be the brother
 GENDER = {**dict.fromkeys(
@@ -101,6 +102,8 @@ def resolve(events, unresolved=None, topic=None):
     for e, role, sno, csubj in found:
         if e.kind == "pronoun" and e.ref is None and e.lemma not in RELATIVE:
             e.ref = pick(e, role, sno, csubj, seen, topic_e)
+            if e.ref is not None and e.ref.lemma == UNKNOWN:
+                e.ref = None                     # continues a chain that refers to nothing known
             if e.ref is not None and e.lemma in PERSONAL and e.ref.gender is None:
                 # "Ann ... she": Ann is female from now on, so a later "he" is someone else
                 e.ref.gender = "m" if e.lemma in MALE_PRONOUNS else "f"
@@ -109,12 +112,34 @@ def resolve(events, unresolved=None, topic=None):
                 # second "her" continues the first one's referent
                 seen.append((e.ref.root(), role, sno, True))
             if e.ref is None:
-                if unresolved is not None:
+                if unresolved is not None and e.lemma in ANAPHORIC:
+                    # "what he did", "no one": not a reference back, so nothing is missing
                     unresolved.append((sno, e.lemma))
+                ph = placeholder(e.lemma)
+                if ph is not None:
+                    # "They saw they were caught and threw down their rifles. They were
+                    # frightened": the unknown "they" stays the likeliest referent of the
+                    # next "they", which must not jump to "the rifles"
+                    seen.append((ph, role, sno, True))
                 fallback(e)
         elif e.kind in ("lex", "name", "coord") and e.ref is None:
             seen.append((e, role, sno, False))
     return events
+
+
+UNKNOWN = "?unknown"
+
+
+def placeholder(w):
+    """Stand-in for whatever an unresolved pronoun w refers to, with w's agreement
+    (number, gender, person or thing), so later pronouns can continue its chain."""
+    if w in PERSONAL:
+        return Entity("name", UNKNOWN, animate=True, gender="m" if w in MALE_PRONOUNS else "f")
+    if w in NEUTER:
+        return Entity("lex", UNKNOWN)
+    if w in PLURAL:
+        return Entity("lex", UNKNOWN, plural=True)
+    return None
 
 
 def pick(p, role, sno, csubj, seen, topic=None):
@@ -142,6 +167,10 @@ def pick(p, role, sno, csubj, seen, topic=None):
         # subject: "John saw him" -> him != John (that would be "himself")
         own = csubj.root()
         cands = [s for s in cands if s[0] is not own]
+    if not cands and w in PLURAL:
+        pair = split_antecedent(recent, role, csubj)
+        if pair is not None:
+            return pair
     if not cands and w in NEUTER:          # "Paris ... it": names known not to be people
         cands = [s for s in recent if s[0].kind == "name" and s[0].animate is False]
     if not cands:
@@ -154,6 +183,25 @@ def pick(p, role, sno, csubj, seen, topic=None):
     # (the entity the text is about), then subjects, then latest mention
     best = max(cands, key=lambda s: (s[2], s[3], s[1] == "subj", seen.index(s)))
     return best[0]
+
+
+def split_antecedent(recent, role, csubj):
+    """'Tom found a box. Sue opened it. They laughed.': with no group to refer
+    to, "they" means the two people of the last sentences -> a group of the two.
+    Only when there are exactly two (three or more: which ones is a guess)."""
+    def person(e):
+        return e.lemma != UNKNOWN and not e.plural and e.kind != "coord" and             ((e.kind == "name" and e.animate is not False) or e.is_person)
+    own = csubj.root() if role in ("obj", "obl") and csubj is not None else None
+    people = {}
+    for e, *_ in recent:
+        e = e.root()
+        if person(e) and e is not own:
+            people.setdefault((e.kind, e.lemma.lower()), e)
+    if own is not None and person(own):
+        people.pop((own.kind, own.lemma.lower()), None)  # "Tom gave them a ball": not Tom
+    if len(people) != 2:
+        return None
+    return Entity("coord", "and", plural=True, members=list(people.values()))
 
 
 def fallback(p):

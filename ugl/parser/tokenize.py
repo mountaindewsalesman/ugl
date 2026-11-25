@@ -28,7 +28,10 @@ _SPECIAL = {"can't": ["ca", "n't"], "won't": ["wo", "n't"], "cannot": ["can", "n
 
 
 def split_sentences(text):
-    """Split on . ! ? followed by space + capital/quote/digit, skipping abbreviations."""
+    """Split on . ! ? followed by space + capital/quote/digit, skipping
+    abbreviations.  A line break (paragraph break) always ends a sentence."""
+    if "\n" in text:
+        return [s for line in text.split("\n") for s in split_sentences(line)]
     text = re.sub(r"\s+", " ", text.strip())
     if not text:
         return []

@@ -569,3 +569,49 @@ def test_names_with_of_stay_one_name():
     ls = lines("He is a professor at the University of Michigan.")
     assert "'University_of_Michigan'" in ls[0].ugl, ls
     assert "n239y" in U.encode("The capital of France is Paris.")[0]     # ordinary "of" unchanged
+
+
+def test_ellipsis_is_not_a_sentence():
+    for en in ("It will not.", "Yes, it is.", "I can."):
+        assert any("ellipsis" in i for l in lines(en) for i in l.issues), en
+    assert not any("ellipsis" in i for l in lines("The dog is happy.") for i in l.issues)
+
+
+def test_unresolved_pronoun_chain_does_not_jump_to_a_thing():
+    # the earlier "they" refers to nothing known; the next "they" continues that
+    # chain (flagged), it does not become "the rifles"
+    ls = lines("They saw they were caught and threw down their rifles. They were terribly frightened.")
+    assert any("refers to nothing" in i for i in ls[-1].issues), ls
+    assert "n2246" not in ls[-1].ugl, ls
+    ls = lines("The dogs barked. They were hungry.")          # a real antecedent still wins
+    assert not ls[-1].issues and ls[-1].ugl.startswith("n909st"), ls
+
+
+def test_linking_verbs_take_the_predicate():
+    # "felt sad", not "felt to be sad"; "very" is the adjective's degree letter only
+    for en, want in (("Lily felt sad and angry.", "felt sad and angry"),
+                     ("Gabon becomes independent.", "becomes independent"),
+                     ("Tom became a doctor.", "became a doctor"),
+                     ("They felt very happy.", "felt very happy")):
+        e = U.encode(en)
+        d = U.decode("\n".join(e))
+        assert want in d and U.encode(d) == e, (en, e, d)
+    assert "n7 a29" not in U.encode("They felt very happy.")[0]        # no extra "with a very way"
+
+
+def test_named_participle():
+    # "a boy named Tom": the boy is named and is Tom (not "someone is Tom")
+    e = U.encode("A little boy named Tom liked to play.")
+    assert "n1210t n1210t v1 n9767" in e[0], e
+    assert "boy named Tom" in U.decode(e[0])
+
+
+def test_they_for_two_people_mentioned_apart():
+    ls = lines("Tom found a box. Sue opened it. They laughed together.")
+    assert not ls[-1].issues and r"v4 n9767 \v4 'Sue' \v4" in ls[-1].ugl, ls
+    assert not any("refers to nothing" in i for l in lines("Tom felt sorry for what he did.") for i in l.issues)
+
+
+def test_paragraph_break_ends_a_sentence():
+    from ugl.parser.tokenize import split_sentences
+    assert split_sentences("Lily went to the park\nShe was happy.") == ["Lily went to the park", "She was happy."]

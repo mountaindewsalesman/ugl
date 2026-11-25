@@ -372,6 +372,10 @@ REL_WORD = {V["time"]: "at", V["cause"]: "because of", V["of"]: "of", V["by"]: "
 SUBORDINATORS = {V["before"], V["after"], V["until"], V["since"]}
 
 
+# verbs that link a subject to a description: "felt sad", not "felt to be sad"
+LINKING = {"feel", "look", "seem", "appear", "become", "remain", "stay", "sound", "smell", "taste",
+           "get", "grow", "turn", "go", "prove", "keep"}
+
 # words that compare without -er / more: "different from" is also "different than"
 COMPARING = {"different", "differently", "other", "otherwise", "else", "rather"}
 
@@ -667,7 +671,7 @@ class Decoder:
             sub.gap = h.base
             person = h.kind == "name" or self.lex.is_proper(h.raw) or (h.kind == "word" and self.lex.is_person_token(h.raw))
             sub.gap_word = "who" if person else "that"
-            words.append(self.clause(r, sub))
+            words.append(self.naming(r, h.base) or self.clause(r, sub))
         s = " ".join(w for w in words if w)
         if case == "poss":
             s += "'" if s.endswith("s") and plural else "'s"
@@ -988,7 +992,30 @@ class Decoder:
         s = self.core(comp, ctx, infinitive=True)
         return s if to else s.replace("to ", "", 1) if s.startswith(("to ", "not to ")) else s
 
+    def naming(self, r, gap):
+        """'a boy named Tom': a relative clause "someone calls / names <the noun>
+        <the noun is Tom>" is said "named Tom".  None for any other clause."""
+        if not (isinstance(r, Core) and r.verb.kind == "word" and self.lemma(r.verb) in ("call", "name")
+                and not r.verb.mods.replace("p", "") and r.subj.head.base == "n4" and not r.subj.adjs
+                and r.obj is not None and r.obj.head.base == gap and len(r.comps) == 1):
+            return None
+        comp = r.comps[0]
+        if not (self.linked_predicate(comp) and isinstance(comp, Core) and comp.subj.head.base == gap):
+            return None
+        return "named " + re.sub(r"^(?:to )?be ", "", self.infinitive(comp, Ctx()))
+
+    def linked_predicate(self, comp):
+        """Is comp "be X" (or "be X and be Y") with no tense of its own?"""
+        if isinstance(comp, Logic) and comp.rel.idx in (V["and"], V["or"]):
+            return self.linked_predicate(comp.a) and self.linked_predicate(comp.b)
+        return isinstance(comp, Core) and comp.verb.kind == "word" and comp.verb.idx == V["be"] \
+            and not comp.verb.mods          # "be happy", "be Tom", "be a doctor"
+
     def complement(self, comp, main, ctx):
         if self.infinitival(comp, main):
+            if self.lemma(main.verb) in LINKING and self.linked_predicate(comp):
+                # "felt sad and angry", "becomes independent", "looked very nice":
+                # a linking verb takes the predicate itself, not "to be ..."
+                return re.sub(r"\b(?:to )?be ", "", self.infinitive(comp, ctx))
             return self.infinitive(comp, ctx)
         return "that " + self.clause(comp, ctx)

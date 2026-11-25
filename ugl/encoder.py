@@ -177,6 +177,10 @@ class Encoder:
                 # "Pathétique Sonata – Beethoven", "Lift Me Up - 5:52": the UGL would
                 # invent an "is"; such lines are not sentences to learn from
                 found.append("no verb: a title, caption or list item, not a sentence")
+            elif any(t["head"] == 0 and t["upos"] == "AUX" for t in tree):
+                # "It will not.", "I can.", "Yes, it is.": the helper stands for a verb
+                # said before; UGL would make the helper itself the event
+                found.append("ellipsis: a helper verb stands for a verb left out, not a sentence on its own")
             try:
                 ev = self.analyzer.sentence(tree, question=question)
                 events.append(ev)
