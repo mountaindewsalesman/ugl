@@ -118,6 +118,13 @@ def resume_point(out, units):
     if os.path.exists(prog):
         with open(prog, encoding="utf-8") as f:
             p = json.load(f)
+        # a stop while a document was being written leaves part of it after the
+        # checkpoint: cut every file back to its size at the checkpoint
+        for name, size in p.get("sizes", {}).items():
+            path = os.path.join(out, name)
+            if os.path.exists(path) and os.path.getsize(path) > size:
+                with open(path, "r+b") as f:
+                    f.truncate(size)
         return p["docs"], p["seen"], p["kept"], p["passages"]
     if not seen:
         return 0, 0, 0, 0
@@ -181,10 +188,14 @@ def main():
     # the grader was trained on flags raised at 0.8 head confidence; it, not the
     # threshold, decides those sentences
     u.encoder.unsure = 0.8 if grader else a.min_confidence
+    shipped = u.encoder.parser             # the shipped parser, which the sense model also reads with
     if a.parser:
         u.encoder.parser = ParserModel(a.parser)
     if a.second_parser and not a.single_parser and os.path.abspath(a.second_parser) != os.path.abspath(a.parser or DEFAULT_PATH):
-        u.encoder.second_parser = ParserModel(a.second_parser)
+        # the same weights as the sense model's parser: share one instance (one
+        # set of weights, one cache, one transformer pass per sentence for both)
+        same = os.path.abspath(a.second_parser) == os.path.abspath(getattr(shipped, "path", ""))
+        u.encoder.second_parser = shipped if same else ParserModel(a.second_parser)
     os.makedirs(a.out, exist_ok=True)
     passages = kept = seen = done_docs = 0
     if a.resume:
@@ -201,6 +212,7 @@ def main():
     fr = open(os.path.join(a.out, "rejected.tsv"), mode, encoding="utf-8", buffering=1)
     fp = open(os.path.join(a.out, "passages.jsonl"), mode, encoding="utf-8", buffering=1)
     fs = open(os.path.join(a.out, "scores.txt"), mode, encoding="utf-8", buffering=1) if grader else None
+    outputs = [h for h in (fu, fe, fr, fp, fs) if h is not None]
     why = collections.Counter()
 
     for doc_no, (source, title, paras) in enumerate(document_units(a.files)):
@@ -273,7 +285,9 @@ def main():
                 passages += 1
         # checkpoint: every document up to this one is fully written
         with open(os.path.join(a.out, "progress.json"), "w", encoding="utf-8") as f:
-            json.dump({"docs": doc_no + 1, "seen": seen, "kept": kept, "passages": passages}, f)
+            json.dump({"docs": doc_no + 1, "seen": seen, "kept": kept, "passages": passages,
+                       # byte sizes: a resume trims away anything written after this point
+                       "sizes": {os.path.basename(h.name): h.tell() for h in outputs}}, f)
         if a.max_sents and seen >= a.max_sents:
             break
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "

@@ -106,8 +106,28 @@ class Encoder:
     def unknown(self):
         return self.serializer.unknown
 
+    def prefetch(self, texts):
+        """With a GPU (ugl.transformer.use_device): run every transformer pass the
+        encoding of these texts will need (main parser, second parser, sense
+        model) in batches, so encoding then reads them from the caches."""
+        from . import transformer
+        if transformer.DEVICE is None:
+            return
+        sents = []
+        for text in texts:
+            if self.strip_parens:
+                text = strip_asides(text)
+            sents += [w for w in (tokenize(s) for s in split_sentences(text)) if any(x[:1].isalnum() for x in w)]
+        models = [self.parser, self.second_parser, getattr(getattr(self.lex, "wsd", None), "p", None)]
+        done = set()
+        for m in models:
+            if m is not None and id(m) not in done and hasattr(m, "prefetch"):
+                done.add(id(m))
+                m.prefetch(sents)
+
     def parse(self, text):
         """-> list of (words, UD token dicts, question?, source text, parser state) per sentence."""
+        self.prefetch([text])
         if self.strip_parens:
             text = strip_asides(text)
         out = []

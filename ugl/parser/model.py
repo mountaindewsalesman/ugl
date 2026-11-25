@@ -55,6 +55,9 @@ class ParserModel:
         # so a head probability of p means about p of such heads are right
         self.temperature = float(meta.get("arc_temperature", 1.0))
         self.cache = {}                   # words -> per-layer word vectors, last few sentences
+        self.cache_size = 16
+        self.scores = {}                  # words -> score() state, filled by prefetch() on a GPU
+        self._hw = None                   # the scoring weights on the GPU
         if self.kind == "transformer":
             from ..transformer import Transformer, WordPiece
             t = meta["transformer"]
@@ -126,6 +129,36 @@ class ParserModel:
             x = np.concatenate([self.lstm_dir(x, l, False), self.lstm_dir(x, l, True)], axis=1)
         return x
 
+    def prefetch(self, sentences, batch=48):
+        """Compute layer_states() for many sentences at once, in padded batches on
+        the transformer's device (ugl.transformer.use_device), so the per-sentence
+        calls that follow find them cached.  Corpus builds call this once per
+        document; one sentence at a time leaves the GPU mostly waiting."""
+        if self.kind != "transformer":
+            return
+        limit = self.tf.max_len() - 2
+        todo, seen = [], set()
+        for words in sentences:
+            key = tuple(words)
+            if not words or key in self.cache or key in seen:
+                continue
+            ids, first = self.wp.encode_words(list(words))
+            if len(ids) > limit + 2:
+                continue                          # read in parts by layer_states itself
+            seen.add(key)
+            todo.append((key, ids, first))
+        # room for this batch plus a few recent sentences; older entries go first
+        self.cache_size = len(todo) + 64
+        for c in (self.cache, self.scores):
+            while len(c) > 64:
+                c.pop(next(iter(c)))
+        todo.sort(key=lambda t: len(t[1]))        # similar lengths together: little padding
+        for i in range(0, len(todo), batch):
+            part = todo[i:i + batch]
+            for (key, _, first), st in zip(part, self.tf.hidden_states_batch([t[1] for t in part])):
+                self.cache[key] = st[:, first]
+                self.scores[key] = self._score_on_device(list(key), self.cache[key])
+
     def layer_states(self, words):
         """Transformer: (layers+1, n_words, d) states at each word's first piece.
         Cached for the last sentence, so the sense model can reuse the pass."""
@@ -148,7 +181,7 @@ class ParserModel:
             hs = self.tf.hidden_states(ids[: limit + 2])
             parts.append(np.stack([h[first] for h in hs]))
         out = np.concatenate(parts, axis=1)
-        if len(self.cache) >= 16:
+        if len(self.cache) >= self.cache_size:
             self.cache.pop(next(iter(self.cache)))
         self.cache[key] = out
         return out
@@ -182,8 +215,39 @@ class ParserModel:
         state = self.score(words)
         return self.tree(state, self.decode_tree(state["S"]))
 
+    def _score_on_device(self, words, layers):
+        """score() on the transformer's device, from precomputed layer states, plus
+        "lab": every label score for every (dependent, head) pair, so tree() and
+        alternative() need no further arithmetic.  Same formulas as the numpy path."""
+        import torch
+        from ..transformer import DEVICE
+        if self._hw is None:
+            self._hw = {k: torch.from_numpy(np.ascontiguousarray(v, dtype=np.float32)).to(DEVICE)
+                        for k, v in self.w.items()}
+        w = self._hw
+        with torch.no_grad():
+            Hs = torch.tensordot(w["mix"], torch.from_numpy(np.ascontiguousarray(layers)).to(DEVICE), dims=1)
+            H = torch.cat([w["root"][None], Hs])
+            mlp = lambda n, x: torch.relu(x @ w[n + ".weight"].T + w[n + ".bias"])   # noqa: E731
+            lin = lambda n, x: x @ w[n + ".weight"].T + w[n + ".bias"]               # noqa: E731
+            dep, head = mlp("arc_dep", H), mlp("arc_head", H)
+            S = dep @ w["arc_W"] @ head.T + (head @ w["arc_u"])[None, :]
+            ld, lh = mlp("lab_dep", H), mlp("lab_head", H)
+            a, L = ld.shape[1], w["lab_lin.weight"]
+            lab = (torch.einsum("ia,lab,jb->ijl", ld, w["lab_W"], lh) + (ld @ L[:, :a].T)[:, None, :]
+                   + (lh @ L[:, a:].T)[None, :, :] + w["lab_lin.bias"])
+            S = S.cpu().numpy()
+            state = {"words": words, "S": S, "P": self.head_probs(S),
+                     "upos": lin("upos", Hs).argmax(1).cpu().numpy(), "xpos": lin("xpos", Hs).argmax(1).cpu().numpy(),
+                     "feats": lin("feats", Hs).argmax(1).cpu().numpy(),
+                     "ld": ld.cpu().numpy(), "lh": lh.cpu().numpy(), "lab": lab.cpu().numpy()}
+        return state
+
     def score(self, words):
         """Everything the parser computes for a sentence before choosing a tree."""
+        hit = self.scores.get(tuple(words))
+        if hit is not None:
+            return hit
         Hs = self.encode(words)                              # (n, d)
         H = np.concatenate([self.w["root"][None, :], Hs])    # (n+1, d), index 0 = ROOT
         S = self.arc_scores(Hs)
@@ -198,7 +262,10 @@ class ParserModel:
         out = []
         for i in range(1, len(ld)):
             j = heads[i]
-            s = np.einsum("a,lab,b->l", ld[i], W, lh[j]) + self.lin("lab_lin", np.concatenate([ld[i], lh[j]]))
+            if "lab" in state:                               # precomputed on the GPU
+                s = state["lab"][i, j]
+            else:
+                s = np.einsum("a,lab,b->l", ld[i], W, lh[j]) + self.lin("lab_lin", np.concatenate([ld[i], lh[j]]))
             out.append({"form": state["words"][i - 1], "upos": self.labels["upos"][state["upos"][i - 1]],
                         "xpos": self.labels["xpos"][state["xpos"][i - 1]],
                         "feats": self.labels["feats"][state["feats"][i - 1]],

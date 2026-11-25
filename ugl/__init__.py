@@ -76,11 +76,19 @@ class UGL:
         groups = {}
         for l in lines:
             groups.setdefault(l.source, []).append(l)
-        bad = {}
+        bad, decoded = {}, {}
         for src, ls in groups.items():
-            ugl = [l.ugl for l in ls]
             try:
-                english = self.decode("\n".join(ugl))
+                decoded[src] = self.decode("\n".join(l.ugl for l in ls))
+            except Exception as e:
+                bad[src] = f"round trip failed: {type(e).__name__}"
+        # every re-parse of the document in one batch (with a GPU; no-op otherwise)
+        self.encoder.prefetch(list(decoded.values()))
+        for src, ls in groups.items():
+            if src not in decoded:
+                continue
+            ugl, english = [l.ugl for l in ls], decoded[src]
+            try:
                 again = [l.ugl for l in self.encoder.encode_lines(english)]
             except Exception as e:
                 bad[src] = f"round trip failed: {type(e).__name__}"

@@ -182,6 +182,47 @@ class Transformer:
                 out.append(x)
             return list(torch.stack(out).cpu().numpy())
 
+    def hidden_states_batch(self, seqs):
+        """Many sequences in one padded pass on DEVICE (padding is masked out of
+        attention, so each result equals hidden_states() of that sequence alone
+        to float rounding) -> list of (layers+1, T_i, d) arrays."""
+        import torch
+        import torch.nn.functional as F
+        w, eps, H = self._torch_weights(), self.eps, self.heads
+        B, T = len(seqs), max(len(s) for s in seqs)
+        with torch.no_grad():
+            ids = torch.zeros((B, T), dtype=torch.long, device=DEVICE)
+            keep = torch.zeros((B, T), dtype=torch.bool, device=DEVICE)
+            for b, s in enumerate(seqs):
+                ids[b, :len(s)] = torch.tensor(s, device=DEVICE)
+                keep[b, :len(s)] = True
+            mask = torch.zeros((B, 1, 1, T), device=DEVICE).masked_fill(~keep[:, None, None, :], float("-inf"))
+            x = (w["embeddings.word_embeddings.weight"][ids] + w["embeddings.position_embeddings.weight"][:T][None]
+                 + w["embeddings.token_type_embeddings.weight"][0])
+            x = F.layer_norm(x, (x.shape[-1],), w["embeddings.LayerNorm.weight"], w["embeddings.LayerNorm.bias"], eps)
+            if "embeddings_project.weight" in w:
+                x = F.linear(x, w["embeddings_project.weight"], w["embeddings_project.bias"])
+            out = [x]
+            for l in range(self.layers):
+                p = f"L.{l}."
+                d = x.shape[-1]
+
+                def lin(n, z):
+                    return F.linear(z, w[p + n + ".weight"], w[p + n + ".bias"])
+                q = lin("attention.self.query", x).view(B, T, H, d // H).transpose(1, 2)
+                k = lin("attention.self.key", x).view(B, T, H, d // H).transpose(1, 2)
+                v = lin("attention.self.value", x).view(B, T, H, d // H).transpose(1, 2)
+                s = (q @ k.transpose(2, 3) / math.sqrt(d // H) + mask).softmax(-1)
+                ctx = (s @ v).transpose(1, 2).reshape(B, T, d)
+                x = F.layer_norm(lin("attention.output.dense", ctx) + x, (d,),
+                                 w[p + "attention.output.LayerNorm.weight"], w[p + "attention.output.LayerNorm.bias"], eps)
+                h = F.gelu(lin("intermediate.dense", x))
+                x = F.layer_norm(lin("output.dense", h) + x, (d,),
+                                 w[p + "output.LayerNorm.weight"], w[p + "output.LayerNorm.bias"], eps)
+                out.append(x)
+            st = torch.stack(out, 1).cpu().numpy()          # (B, layers+1, T, d)
+        return [st[b, :, :len(s)] for b, s in enumerate(seqs)]
+
     def hidden_states(self, ids):
         """ids: piece ids of one sequence -> list of (T, d) arrays, layer 0..L."""
         if DEVICE is not None:

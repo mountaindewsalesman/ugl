@@ -139,20 +139,28 @@ def main():
     ap.add_argument("--offset", type=int, default=0,
                     help="row group (parquet) or document index (text) to start at: a later offset gives fresh text")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--shards", type=int, default=1,
+                    help="write this many consecutive files of --docs documents each, in one pass")
     a = ap.parse_args()
     for name in a.sources or list(SOURCES):
         if name not in SOURCES:
             sys.exit("unknown source %r; choose from %s" % (name, ", ".join(SOURCES)))
         rng = random.Random(a.seed)
         os.makedirs(os.path.join(OUT, name), exist_ok=True)
-        path = os.path.join(OUT, name, "%s-%04d.jsonl" % (name, a.offset))
-        k = 0
-        with open(path, "w", encoding="utf-8") as out:
-            for title, text in SOURCES[name](a.docs, a.offset, rng):
-                if text and text.strip():
-                    out.write(json.dumps({"title": title, "text": text.strip(), "source": name}, ensure_ascii=False) + "\n")
-                    k += 1
-        print("%-12s %5d documents -> %s" % (name, k, os.path.relpath(path, ROOT)), file=sys.stderr)
+        docs = SOURCES[name](a.docs * a.shards, a.offset, rng)
+        for shard in range(a.shards):
+            start = a.offset + shard * a.docs
+            path = os.path.join(OUT, name, "%s-%04d.jsonl" % (name, start))
+            k = 0
+            with open(path, "w", encoding="utf-8") as out:
+                for title, text in docs:
+                    if text and text.strip():
+                        out.write(json.dumps({"title": title, "text": text.strip(), "source": name},
+                                             ensure_ascii=False) + "\n")
+                        k += 1
+                    if k >= a.docs:
+                        break
+            print("%-12s %5d documents -> %s" % (name, k, os.path.relpath(path, ROOT)), file=sys.stderr)
 
 
 if __name__ == "__main__":
