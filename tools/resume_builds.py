@@ -41,6 +41,21 @@ def total_documents(files):
     return sum(1 for _ in document_units(files))
 
 
+def read_progress(path, tries=10):
+    """Documents finished according to a build's progress.json (0 if none).
+    Builds started before checkpoints were written atomically rewrite the file
+    in place, so a read can land mid-write: wait and read again."""
+    for _ in range(tries):
+        if not os.path.exists(path):
+            return 0
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)["docs"]
+        except (ValueError, KeyError, OSError):
+            time.sleep(0.5)
+    raise RuntimeError(f"{path} stayed unreadable")
+
+
 def state(folder):
     """[(name, files, docs done, docs total)] for every build folder."""
     out = []
@@ -50,10 +65,7 @@ def state(folder):
             continue
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             run = json.load(f)
-        done = 0
-        if os.path.exists(os.path.join(d, "progress.json")):
-            with open(os.path.join(d, "progress.json"), encoding="utf-8") as f:
-                done = json.load(f)["docs"]
+        done = read_progress(os.path.join(d, "progress.json"))
         out.append((name, run["files"], done, total_documents(run["files"])))
     return out
 
@@ -77,7 +89,14 @@ def main():
                     help="keep checking: whenever fewer than --max run, resume the next unfinished build")
     a = ap.parse_args()
     while True:
-        unfinished = check(a)
+        try:
+            unfinished = check(a)
+        except Exception:  # noqa: BLE001  one failed pass must not end an unattended watch
+            if not a.watch:
+                raise
+            import traceback
+            traceback.print_exc()
+            unfinished = True
         if not a.watch or not unfinished:
             break
         time.sleep(a.watch)

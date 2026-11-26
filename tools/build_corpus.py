@@ -284,10 +284,14 @@ def main():
                 fp.write(json.dumps(p, ensure_ascii=False) + "\n")
                 passages += 1
         # checkpoint: every document up to this one is fully written
-        with open(os.path.join(a.out, "progress.json"), "w", encoding="utf-8") as f:
+        # written to a temporary file and swapped in, so a reader (the scheduler,
+        # a resume after a crash) never sees a half-written checkpoint
+        prog = os.path.join(a.out, "progress.json")
+        with open(prog + ".tmp", "w", encoding="utf-8") as f:
             json.dump({"docs": doc_no + 1, "seen": seen, "kept": kept, "passages": passages,
                        # byte sizes: a resume trims away anything written after this point
                        "sizes": {os.path.basename(h.name): h.tell() for h in outputs}}, f)
+        os.replace(prog + ".tmp", prog)
         if a.max_sents and seen >= a.max_sents:
             break
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "
