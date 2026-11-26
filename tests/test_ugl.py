@@ -615,3 +615,12 @@ def test_they_for_two_people_mentioned_apart():
 def test_paragraph_break_ends_a_sentence():
     from ugl.parser.tokenize import split_sentences
     assert split_sentences("Lily went to the park\nShe was happy.") == ["Lily went to the park", "She was happy."]
+
+
+def test_public_functions_not_shadowed_by_submodules():
+    """ugl.humanize etc. stay the documented functions after the package has
+    loaded its submodules (a submodule of the same name used to replace one)."""
+    ugl.default()
+    for name in ("encode", "decode", "humanize", "to_ids", "from_ids", "load"):
+        f = getattr(ugl, name)
+        assert callable(f) and not isinstance(f, type(ugl)), name

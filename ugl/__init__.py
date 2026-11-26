@@ -32,7 +32,7 @@ class UGL:
         self.lexicon = Lexicon(dictionary)
         self.decoder = Decoder(self.lexicon)
         self.tokenizer = Tokenizer(self.lexicon)
-        from .humanize import Humanizer
+        from .humanizer import Humanizer
         self.humanizer = Humanizer(self.lexicon, self.decoder)
         self._encoder = None
         self._want_wsd = wsd

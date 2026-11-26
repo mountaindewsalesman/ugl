@@ -1,208 +1,233 @@
-﻿# UGL: a universal grammatical language (v0.1, English only)
+﻿# UGL: a universal grammatical language
 
-English ⇄ a numbered-concept notation whose grammar is fully explicit. See
-[SPEC.md](SPEC.md) for the language itself.
+UGL turns English into a notation of numbered concepts whose grammar is fully
+explicit, and back again. Every word is a numbered meaning (`n909` = dog,
+`v3861` = bark). Each relation opens a scope and closes it with a tag. There
+are no pronouns: the thing referred to is repeated. The goal is precise,
+low-ambiguity text for training language models. [SPEC.md](SPEC.md) defines
+the language.
 
 ```
 EN  : At nine, I ate the apple.
-UGL : #9 v20 n1 v444p n2344t \v20
-BACK: I ate the apple at 9.
+UGL : #9 v20 n1 v416p n4155t \v20
+READ: nine time I ate the apple \time
+BACK: At 9, I ate the apple.
 
 EN  : The man who left saw me.
-UGL : n136t v3 n136t v153p \v3 v117p n1
-BACK: The man that left saw me.
+UGL : n145t v3 n145t v155p \v3 v114p n1
+BACK: The man who left saw me.
 
-EN  : Every dog barks.
-UGL : n988 v9 n988 v4520 \v9
+EN  : Lily found a ball because she was looking under the bed.
+UGL : v7 n1892t v33 'Lily' v315pg \v33 \v7 'Lily' v133p n580 \v7
+BACK: Lily found a ball because Lily was looking under the bed.
 ```
 
-Everything runs locally. There is no cloud service and no large language
-model. English is parsed by UGL's own tagger and dependency parser (a BiLSTM
-trained on five Universal Dependencies English treebanks), which runs on
-numpy alone.
+`READ` is the same UGL with each number replaced by its English word, so you
+can see the structure.
 
-**Playground:** https://mountaindewsalesman.github.io/ugl/ encodes English,
-decodes, tokenizes and explains UGL live in the browser. It runs this repo's
-own Python code in Pyodide. The site is rebuilt from `main` on every push
-(`.github/workflows/pages.yml`) and tested in real Chromium and Firefox
-before it deploys.
+Everything runs locally. No cloud service and no outside language model are
+involved. English is parsed by UGL's own transformer parser, trained on
+Universal Dependencies treebanks. It runs on numpy alone, in Python or in
+the browser.
+
+* **Playground:** https://mountaindewsalesman.github.io/ugl/ encodes, decodes
+  and explains UGL live in your browser, using this repo's Python code in
+  Pyodide. It is rebuilt from `main` on every push and tested in Chromium and
+  Firefox before it deploys.
+* **Corpus page:** https://mountaindewsalesman.github.io/ugl/corpus.html shows
+  live progress of the paired English/UGL training corpus: words, rates and
+  recent sentence pairs.
+* **Architecture, version by version:** [docs/architecture.html](docs/architecture.html).
 
 ## Install
 
-From the repo folder:
+```
+pip install git+https://github.com/mountaindewsalesman/ugl.git          # numpy + lemminflect only
+pip install "ugl[lm] @ git+https://github.com/mountaindewsalesman/ugl.git"   # + English story models
+```
+
+From a clone (Windows shown; on Linux/macOS use `source .venv/bin/activate`):
 
 ```
 python -m venv .venv
-.venv\Scripts\activate            # (Linux/macOS: source .venv/bin/activate)
-pip install -e .                  # library: numpy + lemminflect only
-pip install -e .[spacy]           # + the legacy spaCy encoder (ugl.load(engine="spacy"))
-pip install -e .[dev]             # + tools to rebuild dictionaries, train models, run tests
+.venv\Scripts\activate
+pip install -e .          # the library
+pip install -e .[lm]      # + tokenizers, for English story models
+pip install -e .[dev]     # + everything to rebuild dictionaries, train models, run tests
 ```
-
-Or straight from GitHub, with no clone needed:
-`pip install git+https://github.com/mountaindewsalesman/ugl.git`
 
 ## Use as a library
 
 ```python
 import ugl
 
-ugl.encode("At nine, I ate the apple.")      # ['#9 v20 n1 v444p n2344t \\v20']
-ugl.decode("#9 v20 n1 v444p n2344t \\v20")    # 'I ate the apple at 9.'
+ugl.encode("At nine, I ate the apple.")      # ['#9 v20 n1 v416p n4155t \\v20']
+ugl.decode("#9 v20 n1 v416p n4155t \\v20")    # 'At 9, I ate the apple.'
+ugl.humanize("n909 v9 n909 v3861 \\v9")       # 'dog all dog barks \\all'
 
-ids = ugl.to_ids("Every dog barks.")          # ints for model training
-ugl.from_ids(ids)                             # 'n988 v9 n988 v4520 \\v9'
+ids = ugl.to_ids("Every dog barks.")          # integer ids for model training
+ugl.from_ids(ids)                             # 'n909 v9 n909 v3861 \\v9'
 
-u = ugl.load("ugl-dict-0.1.0.json.gz")        # pin a dictionary version
-u.version, len(u.tokenizer)                   # ('0.1.0', 113468)
+u = ugl.load("ugl-dict-0.6.0.json.gz")        # pin a dictionary version
+u.version, len(u.tokenizer)                   # ('0.6.0', 121886)
+
+# each sentence with the English it came from and anything the encoder is unsure of
+for line in u.encode_lines(text, roundtrip=True):
+    line.ugl, line.source, line.issues
 ```
 
 Tokenizer ids:
-* One id per concept, in frequency order. Truncating the vocabulary keeps
-  the most common meanings: `Tokenizer(lex, max_concepts=20000)`.
-* Modifiers (`+p`, `+s`, …) are separate ids.
-* Names, numbers and unknown words are spelled out character by character.
-* Decoding the ids gives back exactly the same UGL text.
+* One id per concept, in frequency order. Modifier letters (`+p`, `+t`, …)
+  and closing tags are ids of their own.
+* Names, numbers and unknown words are spelled with subword pieces.
+* Decoding ids always gives back exactly the same UGL text.
+* Ids are only valid with their dictionary version and tokenizer scheme
+  (`ugl/tokenizer.py`).
+
+## Story models
+
+`ugl.lm` runs small story-writing models trained on the paired corpus. Give
+it some text and it writes the next sentences. There are two kinds of model:
+
+* **English** models read and write English.
+* **UGL** models read and write UGL. Your English prompt is encoded to UGL,
+  the model continues in UGL, and the decoder turns the result back into
+  English.
+
+```python
+import ugl.lm
+m = ugl.lm.load("ugl-stories")           # a released model: downloaded once to ~/.cache/ugl
+m = ugl.lm.load("path/to/model-folder")  # or a local folder
+m.continue_text("Once upon a time, there was a little dog named Max.", sentences=3)
+m.continue_text("...", details=True)     # [{"english": ..., "ugl": ...}, ...] per sentence
+```
+
+```
+ugl continue "Once upon a time, there was a little dog named Max." --model ugl-stories --show-ugl
+```
+
+**No models are released yet.** The first pair, English and UGL trained on
+the same ~50M words, comes after the current corpus build.
+
+A model is a standard Hugging Face GPT-2 folder (`config.json`,
+`model.safetensors`, `tokenizer.json`), so the same files also work in other
+tools:
+
+* `ugl.lm` runs them with numpy only, on any machine.
+* `transformers` loads them: `GPT2LMHeadModel.from_pretrained(folder)`.
+* `llama.cpp`'s `convert_hf_to_gguf.py` converts them to GGUF for llama.cpp,
+  Ollama or LM Studio.
+* `optimum` exports them to ONNX for the browser (WebGPU).
+
+Models are released as GitHub releases named `lm-<name>` (see below).
 
 ## Command line
 
 ```
-ugl roundtrip "I stayed because it rained." --gloss
-ugl encode "Mary said that John left."
-ugl decode "'Mary' v105p 'John' v153p \v105"
-ugl explain n988 v444
+ugl encode "Mary said that John left." --gloss
+ugl decode "n1862 v104p n720 v155p \v104"      # Mary said that John left.
+ugl roundtrip "I stayed because it rained."
+ugl explain n909 v3861
 ugl sample --n 20 --gloss          # random sentences from data/raw
-pytest tests
+ugl continue "Once upon a time" --model ugl-stories
 ```
 
-`--gloss` prints the tokens as English lemmas so you can read the structure.
 Parenthetical `( … )` and `[ … ]` asides are dropped before encoding.
-
-## Getting text
-
-```
-python scripts\fetch_wikipedia.py api  --count 500      # random articles via API
-python scripts\fetch_wikipedia.py dump --count 50000    # streams the official dump
-```
-
-Dump mode streams and decompresses on the fly and stops after `--count`
-articles, so nothing big is stored. 4,000 articles are about 89 MB of text.
-
-## Dictionaries: frozen, versioned, one file
-
-The dictionary is a single JSON file (gzipped), described in
-[DICTIONARY_FORMAT.md](DICTIONARY_FORMAT.md).
-* Released versions ship inside the package in `ugl/dictionary/`, and
-  `default.txt` says which one loads by default.
-* A released file is never changed, so the default always works and old
-  encodings stay valid.
-
-```
-ugl build-lexicon                          # -> data/build/ugl-dict.json.gz (+ .tsv views)
-ugl build-lexicon --recount --limit-chars 30000000
-ugl promote --version 0.2.0                # freeze it into the package as the new default
-ugl export --out dictionary-export         # plain indented JSON + TSV of the default
-```
-
-Dictionary 0.1.0 was built from 30M characters of Wikipedia (2.07M words):
-* 80,998 noun, 13,737 verb and 18,296 adjective/adverb primitives.
-* 4,628 senses expressed through other words: gloss compounds (`puppy` →
-  young dog), connotation collapses (`mirthless` → `joyless`) and adverbs
-  folded into their adjectives.
 
 ## How it works
 
 | stage | file | method |
 |---|---|---|
-| corpus | `scripts/fetch_wikipedia.py` | MediaWiki API or dump streaming |
-| numbering | `ugl/build_lexicon.py` | frequency per WordNet sense, gloss decomposition |
-| tokenize + parse | `ugl/parser/` | sentence splitter, UD-style tokenizer, BiLSTM tagger + biaffine parser (numpy inference) |
-| meaning | `ugl/analyze.py`, `ugl/coref.py` | UD tree → who-did-what-to-whom graph (`ugl/ir.py`); pronoun resolution |
-| English → UGL | `ugl/serialize.py` | the single place that writes UGL from the graph |
+| sentences + words | `ugl/parser/tokenize.py` | sentence splitter (newlines are boundaries), UD-style tokenizer |
+| parse | `ugl/parser/`, `ugl/transformer.py` | ELECTRA-small transformer, biaffine heads, Eisner decoding (always a valid tree) |
+| word meaning | `ugl/wsd_gloss.py` | sense head trained with the parser: the word in context against each sense's gloss (precomputed gloss table) |
+| meaning graph | `ugl/analyze.py` | dependency tree → who-did-what-to-whom graph (`ugl/ir.py`) |
+| pronouns | `ugl/coref.py` | pronoun → the thing referred to, across a whole document |
+| simplify | `ugl/simplify.py` | long sentences split into simpler ones with the same meaning |
+| English → UGL | `ugl/serialize.py` | the single place that writes UGL |
 | UGL → English | `ugl/decoder.py` | recursive-descent parser + realiser (`lemminflect`); no neural net |
 
-## Parser (EWT test set)
+Measured accuracy:
 
-| model | UPOS | UAS | LAS |
-|---|---|---|---|
-| EWT only, CPU (v1) | 96.0 | 86.9 | 83.9 |
-| EWT + GUM + LinES + ParTUT + Atis, GPU | 96.1 | 88.9 | 86.0 |
-| **+ character CNN word encoder (default)** | **96.2** | **89.3** | **86.3** |
+| model | labelled attachment (LAS) | word sense |
+|---|---|---|
+| **ELECTRA-small (shipped, runs in the browser)** | **90.8** | 73.5% on held-out SemCor (most common sense: 66.8%) |
+| ELECTRA-base (corpus building only, 206 MB) | 92.7 | higher than small |
 
-Train with `python tools/train_parser.py` (it uses a CUDA GPU if there is one),
-score with `tools/eval_parser.py`. `tools/compare_encoders.py --gold N` encodes
-hand-annotated trees and predicted trees side by side. The analyzer and
-serializer run without errors on all 1,500 sampled test trees.
+Train the parsers with `tools/train_parser_tf.py`; score them with
+`tools/eval_parser.py`.
 
-## Measured on 121 random Wikipedia sentences (first version)
+## Dictionaries: frozen and versioned
 
-* **0.94** UGL tokens per English word. Some content is currently dropped (see
-  below), so the true figure is a little higher.
-* 3% of encodings failed to parse back, and 2% of tokens were words missing
-  from the lexicon.
-
-Token counts only save compute if a model uses UGL tokens as its vocabulary,
-one token per concept. A standard tokenizer splits `n26988` into several
-pieces.
-
-## Token cost (tokenizer ids per English word, 150 Wikipedia sentences)
-
-`python tools/token_cost.py ugl-dict-0.2.0.json.gz ugl-dict-0.4.0.json.gz`
-
-| step | ids / word |
-|---|---|
-| dictionary 0.2.0, tokenizer scheme 1 (names spelled letter by letter) | 3.13 |
-| + frequent proper nouns are numbered nouns (dictionary 0.3.0) | 2.72 |
-| + one-id closing tags for relation verbs (scheme 2) | 2.48 |
-| + subword pieces for the remaining literals (dictionary 0.4.0) | 1.99 |
-| + coordinated noun phrases stay one group (no distribution) | **1.96** |
-
-## Choosing word meanings (optional, local)
-
-Each word's meaning is chosen with a BERT model that runs on your machine.
-For every meaning it keeps one average vector, built from the hand-tagged
-SemCor corpus.
-
-| method | accuracy on 1,493 held-out ambiguous words |
-|---|---|
-| always the most common meaning (default without the model) | 66.8% |
-| static word vectors vs. glosses (`ugl.wsd`) | 66.8% (no gain) |
-| **BERT context vs. SemCor sense centroids** (`ugl.wsd_context`) | **73.5%** |
-
-To turn it on:
+Each dictionary is a single gzipped JSON file in `ugl/dictionary/`, described in
+[DICTIONARY_FORMAT.md](DICTIONARY_FORMAT.md). `default.txt` names the default
+(currently 0.6.0). A released file is never changed, so old encodings stay
+valid.
 
 ```
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install transformers nltk
-# either download the trained centroids (37 MB) from the GitHub release ...
-gh release download wsd-0.1.0 -R mountaindewsalesman/ugl -D ugl/models
-# ... or train them yourself (~20 min on CPU)
-python tools/train_wsd.py --out ugl/models/bert-semcor.npz
-python tools/eval_wsd.py --context ugl/models/bert-semcor.npz
+ugl build-lexicon                     # -> data/build/ugl-dict.json.gz
+ugl promote --version 0.7.0           # freeze it into the package as the new default
+ugl export --out dictionary-export    # plain JSON + TSV views
 ```
 
-`ugl.load()` uses the model automatically when `ugl/models/bert-semcor.npz`
-(or the file named in `$UGL_WSD`) exists. Use `ugl.load(wsd=False)` to turn
-it off. The first time, `bert-base-uncased` (440 MB) is downloaded from
-Hugging Face; after that, everything is local.
+After a dictionary or parser change, rebuild the gloss table with
+`tools/build_gloss_table.py`.
 
-## Known limitations (in order of how much they hurt)
+## Building the training corpus
 
-1. **Word-sense choice is still the main source of meaning errors.** The
-   contextual model picks the right meaning 73.5% of the time on held-out
-   SemCor, against 66.8% for "always pick the most common meaning". It
-   still fails on cases like `particle` → *atom*, or two meanings of "bank"
-   in one sentence. Without the model installed, the encoder always picks
-   the most common meaning.
-2. **The parser's mistakes become UGL's mistakes.** Lists, dates, headings and long sentences parse badly; some modifiers and phrases are
-   silently dropped.
-3. **Pronoun resolution is a recency heuristic.** It can pick the wrong noun.
-4. **Compounds use the first sense of each gloss word.** `baya`
-   ("common Indian weaverbird") came out as *weaver* (the person). Review
-   `compounds.tsv`.
-5. **The decoder's English is stilted** ("impact negatively a human health").
-   This is intended: the decoder is literal.
-6. **Countability isn't known**, so you get "a water".
-7. **Quantifier scope is always surface order**, and "some/any" are treated
-   as plain indefinites.
-8. **Hyphenated words** ("by-product") often come out as unknown literals.
+1. **Fetch** English text from open datasets into `data/raw/<source>/` with
+   `scripts/fetch_sources.py`. Sources: TinyStories, Simple Wikipedia,
+   FineWeb-Edu, Project Gutenberg, CC-News, OpenAssistant dialogue.
+   `scripts/fetch_wikipedia.py` fetches Wikipedia.
+2. **Encode and filter** with `tools/build_corpus.py`. It encodes whole
+   documents, so pronouns resolve across paragraphs. It keeps only sentences
+   that pass all of these checks:
+   * The base and small parsers agree.
+   * The parser is confident, at 0.6 or more, where it matters.
+   * Decoding the UGL and re-encoding it gives the same UGL.
+
+   The outputs are `passages.jsonl`, `ugl.txt`, `english.txt` and
+   `rejected.tsv` (with reasons). Use `--device cuda` for batched GPU parsing
+   (same output as on the CPU). Use `--resume` to continue exactly where the
+   build stopped.
+3. **Run unattended:** `tools/resume_builds.py <folder> --max 5 --watch 300`
+   restarts any stopped build and keeps up to 5 running. Five is about what
+   fits in 8 GB of GPU memory. `tools/corpus_monitor.py` publishes the stats
+   behind the corpus page every 10 minutes.
+
+## Training and releasing story models
+
+```
+python tools/train_lm.py data/build/corpus-v2 --lang ugl        # -> data/build/lm/ugl
+python tools/train_lm.py data/build/corpus-v2 --lang english
+python tools/export_lm.py data/build/lm/ugl dist/ugl-stories --check
+gh release create lm-ugl-stories dist/ugl-stories/* --title "UGL story model"
+```
+
+Both languages train on the same passages, with the same split, model size
+and settings. The headline number is **bits per English word** on the test
+passages, which is comparable even though the two languages tokenize
+differently. `--check` confirms that the exported model predicts the same as
+the trained one in `ugl.lm` and in `transformers`.
+
+## Tests
+
+```
+pytest tests
+```
+
+`tests/test_ugl.py` covers the bug families found so far (one regression test
+per family). `tests/test_lm.py` covers the story-model runner and export.
+
+## Known limitations
+
+1. **Parser mistakes become UGL mistakes.** Lists, headings, dates and long
+   sentences are the weak spots. The corpus filter keeps 58% of TinyStories
+   sentences but only about 15% of Wikipedia sentences.
+2. **Word sense is wrong about a quarter of the time** (for example *crying*
+   → *calling*).
+3. **Pronoun resolution is heuristic.** It can pick the wrong person.
+4. **The decoder's English is literal and stilted** on purpose ("asked that
+   …" for quoted questions; "named X").
+5. **Countability isn't known** (you can get "a water").
+6. **Quantifier scope always follows surface order.**

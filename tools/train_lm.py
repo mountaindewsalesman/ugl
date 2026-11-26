@@ -20,7 +20,8 @@ The headline number is bits per English word on the test passages: the total
 negative log-likelihood of each test passage, in bits, divided by the number
 of English words in it.  It is comparable across the two languages even though
 they tokenize differently.  Also written: loss per token, samples (UGL samples
-decoded back to English), and the model for tools/generate_lm.py.
+decoded back to English), and model.pt, which tools/export_lm.py packages
+as a standard GPT-2 folder for ugl.lm / `ugl continue`.
 """
 import argparse
 import glob

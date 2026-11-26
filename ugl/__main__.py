@@ -5,6 +5,7 @@
   python -m ugl sample --n 20                       roundtrip random corpus sentences
   python -m ugl build-lexicon [--limit-chars N]
   python -m ugl explain n1234                       what a token means
+  python -m ugl continue "Once upon a time" --model ugl-stories   next sentences (ugl/lm.py)
 """
 import argparse
 import glob
@@ -101,7 +102,25 @@ def main(argv=None):
     ex.add_argument("--out", default="dictionary-export")
     b = sub.add_parser("build-lexicon")
     b.add_argument("rest", nargs=argparse.REMAINDER)
+    c = sub.add_parser("continue", help="write what comes next with a trained story model (ugl/lm.py)")
+    c.add_argument("text", nargs="+")
+    c.add_argument("--model", required=True, help="a released model's name (downloaded once) or a model folder")
+    c.add_argument("--sentences", type=int, default=5)
+    c.add_argument("--temperature", type=float, default=0.8, help="0 = always the most likely token")
+    c.add_argument("--seed", type=int, default=None)
+    c.add_argument("--show-ugl", action="store_true", help="also print the UGL the model wrote")
     a = ap.parse_args(argv)
+
+    if a.cmd == "continue":
+        from .lm import load as load_lm
+        m = load_lm(a.model)
+        got = m.continue_text(" ".join(a.text), sentences=a.sentences, temperature=a.temperature,
+                              seed=a.seed, details=True)
+        for s in got:
+            if a.show_ugl and s["ugl"]:
+                print("UGL :", s["ugl"])
+            print(s["english"] if s["english"] is not None else "<the model wrote UGL the decoder can't read>")
+        return
 
     if a.cmd == "build-lexicon":
         from .build_lexicon import main as bmain
@@ -114,7 +133,7 @@ def main(argv=None):
 
     global HUMANIZER
     lex, enc, dec = load()
-    from .humanize import Humanizer
+    from .humanizer import Humanizer
     HUMANIZER = Humanizer(lex, dec)
     if a.cmd == "encode":
         for line in enc.encode(" ".join(a.text)):

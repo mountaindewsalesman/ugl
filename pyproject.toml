@@ -14,6 +14,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# English story models (ugl.lm): their byte-level BPE tokenizer; UGL models need nothing extra
+lm = ["tokenizers>=0.15"]
 # the legacy spaCy encoder; rebuilding dictionaries (spaCy counts the corpus and
 # parses glosses); dev tools
 spacy = ["spacy>=3.8,<3.9", "en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl"]
