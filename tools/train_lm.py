@@ -71,7 +71,7 @@ def english_words(p):
 class UGLTokens:
     """UGL tokenizer ids, remapped to the ids seen in training."""
 
-    def __init__(self, vocab=None, refs=True):
+    def __init__(self, vocab=None, refs=False):
         import ugl
         u = ugl.UGL(wsd=False)
         self.tok = u.tokenizer
@@ -283,8 +283,11 @@ def main():
     ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--no-refs", action="store_true",
-                    help="UGL: write repeated mentions out in full instead of as back-references @k")
+    ap.add_argument("--refs", action="store_true",
+                    help="UGL: repeated mentions as back-references @k (SPEC rule 15).  Off by default: "
+                         "on 44M words (20M-parameter model) they cost 0.08 bits per English word against "
+                         "full names (3.292 vs 3.210), although 16%% shorter; a transformer copies a "
+                         "repeated name more easily than it ranks referents by recency")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "data", "build", "lm", a.lang)
     os.makedirs(out, exist_ok=True)
@@ -306,7 +309,7 @@ def main():
     say(f"passages: {', '.join(f'{k} {len(v)}' for k, v in data.items())}; "
         f"English words in train {sum(english_words(p) for p in data['train']):,}")
     # the vocabulary size comes from the UGL side either way, so both models match
-    ugl_tok = UGLTokens(refs=not a.no_refs)
+    ugl_tok = UGLTokens(refs=a.refs)
     vocab = ugl_tok.fit(data["train"])
     if a.lang == "ugl":
         tok = ugl_tok
@@ -333,7 +336,7 @@ def main():
     valid_words = sum(english_words(p) for p in data["valid"])
     best = float("inf")
     cfg = {"lang": a.lang, "vocab": vocab, "d": a.d, "layers": a.layers, "heads": a.heads, "ctx": a.ctx,
-           "refs": a.lang == "ugl" and not a.no_refs}
+           "refs": a.lang == "ugl" and a.refs}
     t1 = time.time()
     eval_time = 0.0
     for step in range(1, steps + 1):
