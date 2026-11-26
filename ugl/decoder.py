@@ -455,12 +455,14 @@ class Decoder:
         self.lex = lexicon
 
     def decode(self, text):
-        """Decode one UGL sentence (or several separated by newlines)."""
+        """Decode one UGL sentence (or several separated by newlines).
+        Back-references (@k, rule 15) resolve within the given sentences."""
         out = []
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
+        lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
+        if "@" in text:
+            from .refs import expand
+            lines = expand(lines, self.lex.is_proper)
+        for line in lines:
             tree = Parser(tokenize(line)).parse()
             s = self.clause(tree, Ctx())
             s = re.sub(r"\s+", " ", s).strip()

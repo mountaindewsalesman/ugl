@@ -55,10 +55,17 @@ class UGL:
     def version(self):
         return self.lexicon.version
 
-    def encode(self, text, keep_memory=False):
+    def encode(self, text, keep_memory=False, refs=False):
         """English text -> list of UGL sentences (a long English sentence
-        may become several simpler ones; see simplify)."""
-        return self.encoder.encode(text, keep_memory=keep_memory)
+        may become several simpler ones; see simplify).
+        refs=True: repeated mentions as back-references @k (rule 15; decode
+        the sentences together, as one text, to resolve them)."""
+        lines = self.encoder.encode(text, keep_memory=keep_memory)
+        if refs:
+            from .refs import compress
+            flat = [l for s in lines for l in s.split("\n")]
+            lines = compress(flat, self.lexicon.is_proper)
+        return lines
 
     def encode_lines(self, text, topic=None, roundtrip=False):
         """-> list of Line(ugl, source, issues, spans): each UGL line with the

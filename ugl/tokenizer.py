@@ -21,7 +21,8 @@ from .core import RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, MOD_ORDER, parse_lite
 #   1: first layout
 #   2: one-id closing tags for reserved verbs; literal pieces from the dictionary
 #   3: modifier letters b (non-) and i (anti-)
-SCHEME = 3
+#   4: back-references @1..@9 (rule 15)
+SCHEME = 4
 
 SPECIALS = ["<pad>", "<bos>", "<eos>", "<unk>", "<sep>"]
 PIECE = "\u25b8"            # vocab prefix for a multi-character literal piece
@@ -38,7 +39,8 @@ class Tokenizer:
         # ordinary verb is <close> + its id
         closes = [f"\\v{i}" for i in sorted(RESERVED_VERBS)]
         pieces = list(getattr(lexicon, "literal_pieces", []) or [])
-        vocab = list(SPECIALS) + list(STRUCT) + closes + [f"+{c}" for c in MOD_ORDER] + CHARS + BYTES
+        refs = [f"@{k}" for k in range(1, 10)]
+        vocab = list(SPECIALS) + list(STRUCT) + refs + closes + [f"+{c}" for c in MOD_ORDER] + CHARS + BYTES
         vocab += [PIECE + p for p in pieces]
         vocab += [f"n{i}" for i in sorted(RESERVED_NOUNS)] + [f"v{i}" for i in sorted(RESERVED_VERBS)]
         from .pieces import Segmenter
@@ -87,6 +89,8 @@ class Tokenizer:
                 cls = "v"
             out.append(self.id.get(f"{cls}{idx}", self.unk))
             return out + [self.id["+" + c] for c in mods]
+        if t.startswith("@"):
+            return [self.id[t[:2]]] + [self.id["+" + c] for c in t[2:]]
         if t.startswith("#"):
             return self._literal("<num>", t[1:])
         if t.startswith("'"):

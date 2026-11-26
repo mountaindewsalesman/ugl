@@ -84,7 +84,8 @@ def main():
         tok = ugl.UGL(wsd=False).tokenizer
         with open(os.path.join(a.trained, "vocab.json")) as f:
             vocab = json.load(f)
-        info.update(dictionary=f"ugl-dict-{tok.version}.json.gz", tokenizer_scheme=tok.scheme)
+        info.update(dictionary=f"ugl-dict-{tok.version}.json.gz", tokenizer_scheme=tok.scheme,
+                    back_references=bool(cfg.get("refs")))
         with open(os.path.join(a.out, "tokenizer.json"), "w", encoding="utf-8") as f:
             json.dump(ugl_tokenizer_json(vocab, tok), f, ensure_ascii=False)
     else:

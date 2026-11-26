@@ -224,19 +224,33 @@ class LM:
     def prompt_ids(self, text):
         """[EOS] + the prompt's sentences with a break after each (every model
         writes whole new sentences after a prompt)."""
-        ids = [EOS]
+        return self._prompt(text)[0]
+
+    def _prompt(self, text):
+        """-> (model ids, the prompt's UGL lines as the model saw them)."""
+        ids, seen = [EOS], []
         if self.lang == "ugl":
-            for sent in self.ugl.encode(text):
-                for line in sent.split("\n"):                 # as tools/train_lm.py tokenizes
+            groups = [s.split("\n") for s in self.ugl.encode(text)]   # as tools/train_lm.py tokenizes
+            if self.config.get("ugl", {}).get("back_references"):
+                from .refs import compress
+                flat = compress([l for g in groups for l in g], self.ugl.lexicon.is_proper)
+                sizes, groups, i = [len(g) for g in groups], [], 0
+                for n in sizes:
+                    groups.append(flat[i:i + n])
+                    i += n
+            for g in groups:
+                for line in g:
                     ids += [self.to_model.get(t, UNK) for t in self.ugl.tokenizer.encode(line)]
+                    seen.append(line)
                 ids.append(BRK)
         else:
             for s in self._sentences(text):
                 ids += self.bpe.encode(s).ids + [BRK]
-        return ids
+        return ids, seen
 
-    def sentences(self, ids):
-        """Generated model ids -> list of sentences ({"english", "ugl"})."""
+    def sentences(self, ids, context=()):
+        """Generated model ids -> list of sentences ({"english", "ugl"}).
+        context: the prompt's UGL lines, which back-references (@k) may point into."""
         groups, cur = [], []
         for i in ids:
             if i == EOS:
@@ -247,14 +261,19 @@ class LM:
             elif i > UNK:
                 cur.append(i)
         groups.append(cur)
-        out = []
+        out, history = [], list(context)
         for g in (g for g in groups if g):
             if self.lang == "ugl":
                 u = self.ugl.tokenizer.decode([self.to_tok[i] for i in g if i in self.to_tok])
                 try:
-                    en = self.ugl.decode(u)
+                    full = u
+                    if "@" in u:                 # resolve back-references against everything before
+                        from .refs import expand
+                        full = "\n".join(expand(history + u.split("\n"), self.ugl.lexicon.is_proper)[len(history):])
+                    en = self.ugl.decode(full)
                 except Exception:  # noqa: BLE001  a malformed generated sentence spoils no other
                     en = None
+                history += u.split("\n")
                 out.append({"english": en, "ugl": u})
             else:
                 out.append({"english": self.bpe.decode(g).strip(), "ugl": None})
@@ -266,10 +285,10 @@ class LM:
         """English prompt -> the next `sentences` sentences, as English text.
         details=True: the list of {"english", "ugl"} per sentence instead (a UGL
         sentence the decoder can't read has english None)."""
-        ids = self.prompt_ids(prompt)
+        ids, seen = self._prompt(prompt)
         new = self.model.generate(ids, max_tokens, temperature, top_k, np.random.default_rng(seed),
                                   max_breaks=sentences)
-        got = self.sentences(new)
+        got = self.sentences(new, seen)
         if details:
             return got
         return " ".join(s["english"] for s in got if s["english"])

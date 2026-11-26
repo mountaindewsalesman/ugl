@@ -133,6 +133,7 @@ TOKEN_RE = re.compile(r"""
   | (?P<unk>[nva]\?(?:'[^'\s]+'[a-z]*|[^\s']+))   # n?'word'mods  (old form n?word read-only)
   | (?P<num>\#[^\s]+)
   | (?P<name>'[^'\s]+'[a-z]*)
+  | (?P<ref>@[1-9][a-z]*)                          # back-reference (rule 15, ugl/refs.py)
 """, re.X)
 WORD_RE = re.compile(r"^(nv|n|v|a)(\d+)([a-z]*)$")
 

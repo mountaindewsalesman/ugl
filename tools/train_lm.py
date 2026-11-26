@@ -71,18 +71,34 @@ def english_words(p):
 class UGLTokens:
     """UGL tokenizer ids, remapped to the ids seen in training."""
 
-    def __init__(self, vocab=None):
+    def __init__(self, vocab=None, refs=True):
         import ugl
-        self.tok = ugl.UGL(wsd=False).tokenizer
+        u = ugl.UGL(wsd=False)
+        self.tok = u.tokenizer
+        self.is_proper = u.lexicon.is_proper
+        self.refs = refs                          # repeated mentions as @k within each passage (SPEC rule 15)
         self.vocab = vocab                        # original id -> model id
         self.inv = None
 
+    def lines(self, p):
+        """The passage's UGL lines, grouped per sentence (back-references if refs)."""
+        groups = [s.split("\n") for s in p["ugl"]]
+        if not self.refs:
+            return groups
+        from ugl.refs import compress
+        flat = compress([l for g in groups for l in g], self.is_proper)
+        out, i = [], 0
+        for g in groups:
+            out.append(flat[i:i + len(g)])
+            i += len(g)
+        return out
+
     def pieces(self, p):
         out = []
-        for k, s in enumerate(p["ugl"]):
+        for k, g in enumerate(self.lines(p)):
             if k:
                 out.append(None)                  # sentence break
-            for line in s.split("\n"):
+            for line in g:
                 out += self.tok.encode(line, bos=False, eos=False)
         return out
 
@@ -267,6 +283,8 @@ def main():
     ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--no-refs", action="store_true",
+                    help="UGL: write repeated mentions out in full instead of as back-references @k")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "data", "build", "lm", a.lang)
     os.makedirs(out, exist_ok=True)
@@ -288,7 +306,7 @@ def main():
     say(f"passages: {', '.join(f'{k} {len(v)}' for k, v in data.items())}; "
         f"English words in train {sum(english_words(p) for p in data['train']):,}")
     # the vocabulary size comes from the UGL side either way, so both models match
-    ugl_tok = UGLTokens()
+    ugl_tok = UGLTokens(refs=not a.no_refs)
     vocab = ugl_tok.fit(data["train"])
     if a.lang == "ugl":
         tok = ugl_tok
@@ -314,7 +332,8 @@ def main():
         opt, lambda s: min(1.0, (s + 1) / warm) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, s / steps)))))
     valid_words = sum(english_words(p) for p in data["valid"])
     best = float("inf")
-    cfg = {"lang": a.lang, "vocab": vocab, "d": a.d, "layers": a.layers, "heads": a.heads, "ctx": a.ctx}
+    cfg = {"lang": a.lang, "vocab": vocab, "d": a.d, "layers": a.layers, "heads": a.heads, "ctx": a.ctx,
+           "refs": a.lang == "ugl" and not a.no_refs}
     t1 = time.time()
     eval_time = 0.0
     for step in range(1, steps + 1):
@@ -370,10 +389,13 @@ def main():
             f.write(f"PROMPT  {p['english'][0]}\n")
             if u is not None:
                 f.write("UGL     " + " / ".join(cont) + "\n")
-                back = []
+                from ugl.refs import expand
+                back, history = [], [l for g in tok.lines(p)[:1] for l in g]   # the prompt: what @k can point to
                 for c in cont:                    # each sentence on its own: one bad line spoils no other
                     try:
-                        back.append(u.decode(c))
+                        full = expand(history + [c], u.lexicon.is_proper)[-1] if tok.refs else c
+                        back.append(u.decode(full))
+                        history.append(c)
                     except Exception:  # noqa: BLE001
                         back.append("<not valid UGL>")
                 cont = back

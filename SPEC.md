@@ -14,6 +14,7 @@ word order, a modifier letter, or an explicit open/close scope.
 | `#…`         | number literal                                     | `#9`, `#1990`  |
 | `'…'`        | name literal (spaces → `_`)                        | `'New_York'`   |
 | `n?w` `v?w` `a?w` | word missing from the lexicon (kept literally) | `n?blorft`     |
+| `@k`         | back-reference: the k-th most recent referent (rule 15) | `@1`, `@2y` |
 
 Modifier letters come right after the digits, in a fixed canonical order:
 `n105st`.
@@ -167,3 +168,14 @@ Rules:
    then attribute nouns and names, then numbers ("the 1902 plague epidemic" =
    "the plague epidemic of 1902"); relations wrapped around one clause go by
    relation number, then by their landmark's tokens.
+15. **Back-references.** A referent already mentioned in the same text may be
+   written `@k`: the referent mentioned k-th most recently (k = 1 to 9), with a
+   possessive `y` if needed (`@1y`). Referents are names, definite noun heads
+   (`n_dog_t`, `n_cat_ts`, `n_box_d`) and two-member groups of those (rule 9).
+   Every mention moves its referent to the front of the list; a group written in
+   full counts its members first, then itself. `@k` means exactly the same as
+   writing the referent out again, so the full form is always equivalent and
+   either may be stored:
+   `'Tom' v_land_p v30 n_back_t 'Tom'y \v30` = `'Tom' v_land_p v30 n_back_t @1y \v30`
+   = Tom landed on his back. A text's first mention of anything is written in
+   full. `ugl/refs.py` converts between the two forms exactly.

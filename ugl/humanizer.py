@@ -85,7 +85,11 @@ class Humanizer:
         return out
 
     def __call__(self, text):
-        return "\n".join(self.line(l) for l in text.strip().split("\n") if l.strip())
+        lines = [l for l in text.strip().split("\n") if l.strip()]
+        if "@" in text:                       # back-references read as what they point to
+            from .refs import expand
+            lines = expand(lines, self.lex.is_proper)
+        return "\n".join(self.line(l) for l in lines)
 
     # ------------------------------------------------------------------ tokens
     def token(self, s, obj=False, subj=None):

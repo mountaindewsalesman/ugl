@@ -188,7 +188,8 @@ def main():
     a = ap.parse_args()
     test = [p for p in passages(a.corpus) if split_of(p) == "test"]
     log(f"{len(test):,} test passages")
-    utok = UGLTokens()
+    ucfg = torch.load(os.path.join(a.lm, "ugl", "model.pt"), map_location="cpu")["cfg"]
+    utok = UGLTokens(refs=ucfg.get("refs", False))     # as the model was trained
     with open(os.path.join(a.lm, "ugl", "vocab.json")) as f:
         utok.vocab = {int(k): v for k, v in json.load(f).items()}
     etok = EnglishTokens(os.path.join(a.lm, "english", "bpe.json"))
