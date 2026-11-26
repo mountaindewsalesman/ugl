@@ -74,6 +74,11 @@ def build_bundle(path):
         # already gzipped: store it rather than compressing twice
         z.write(dict_file, f"ugl/dictionary/{os.path.basename(dict_file)}",
                 compress_type=zipfile.ZIP_STORED)
+        # word counts for the decoder's word choice (tools/build_word_freq.py): the
+        # browser must say the same words as the desktop
+        freq = os.path.join(DICT_DIR, "wordfreq.json.gz")
+        if os.path.exists(freq):
+            z.write(freq, "ugl/dictionary/wordfreq.json.gz", compress_type=zipfile.ZIP_STORED)
 
 
 def fetch_wheel(name, out_dir):
