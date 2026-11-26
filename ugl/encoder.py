@@ -18,6 +18,12 @@ from .decoder import Parser as UGLParser
 _ASIDE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]")
 
 
+def is_question(sentence):
+    """Ends in a question mark, closing quotes and brackets aside:
+    '"Mom, can I play with my toys?"' is a question."""
+    return sentence.rstrip().rstrip("\"'”’)]").rstrip().endswith("?")
+
+
 def strip_asides(text):
     """Drop (parenthetical) and [bracketed] asides, innermost first."""
     prev = None
@@ -137,7 +143,7 @@ class Encoder:
             if any(w[:1].isalnum() for w in words):
                 state = self.parser.score(words)
                 tree = self.parser.tree(state, self.parser.decode_tree(state["S"]))
-                out.append((words, tree, s.rstrip().endswith("?"), s.strip(), state))
+                out.append((words, tree, is_question(s), s.strip(), state))
             if self.progress:
                 self.progress(k + 1, 2 * len(sents))
         return out

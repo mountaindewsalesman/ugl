@@ -50,7 +50,9 @@ class Serializer:
         if e.kind == "name":
             return self.proper(e.lemma, "s" if e.plural else "")[:1]
         if e.kind == "reserved":
-            return [add_mods(e.lemma, "s" if e.plural else "")]
+            # its determiner too: an unresolved "they" is "the things" (n3st) at every
+            # mention, not "the things" and then "things" (n3s)
+            return [add_mods(e.lemma, ("s" if e.plural else "") + e.det)]
         if e.kind == "num":
             return [e.lemma]
         return ["n3t"]

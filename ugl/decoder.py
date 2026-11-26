@@ -394,6 +394,8 @@ FUSED = {"something", "nothing", "someone", "nobody", "what", "who"}
 # object they would read as part of the object.  Every other adverb - particles
 # ("pick it up"), flat adverbs ("ran fast", "worked harder") - follows the verb and
 # its object.
+TIME_UNITS = {"day", "night", "morning", "evening", "afternoon", "week", "month", "year", "weekend",
+              "summer", "winter", "spring", "autumn", "fall", "time", "moment", "minute", "hour"}
 PREVERBAL = {"often", "always", "never", "sometimes", "usually", "also", "still", "already",
              "just", "later", "soon", "even", "only", "rarely", "seldom", "once", "again",
              "first", "then", "now", "almost", "nearly", "eventually", "ever", "frequently"}
@@ -480,7 +482,8 @@ class Decoder:
         if t.kind == "unk":
             return parse_literal(t.raw)[2]
         cls = "v" if t.cls == "nv" else t.cls
-        return self.lex.lemma_of(cls, t.idx)
+        # the word English uses most for the concept (lexicon.surface), else its lemma
+        return self.lex.surface(cls, t.idx) or self.lex.lemma_of(cls, t.idx)
 
     def is_adverb_sense(self, t):
         """The dictionary meaning is itself an adverb (twice, often): no -ly."""
@@ -913,7 +916,17 @@ class Decoder:
 
     def relation(self, c, ctx):
         """A relation wrapper's own words: "to the school"."""
-        return f"{self.preposition(c)} {self.np(c.land, ctx, 'obj')}"
+        land = self.np(c.land, ctx, "obj")
+        if c.rel.idx == V["time"] and not c.rel.mods and c.land.head.kind == "word" \
+                and self.lemma(c.land.head) in TIME_UNITS:
+            # English says these time phrases with no preposition: "one day" (not
+            # "at 1 day"), "the next day", "that night", "every morning", "last week"
+            m = re.fullmatch(r"1 (\w+)", land)
+            if m:
+                return f"one {m.group(1)}"
+            if re.match(r"(the (next|following|same|previous|other)|that|this|these|those|every|each|last|next) ", land):
+                return land
+        return f"{self.preposition(c)} {land}"
 
     def core(self, c, ctx, question=False, infinitive=False, gerund=False):
         v = c.verb
@@ -964,6 +977,11 @@ class Decoder:
         particles = [w for w in late if w in ("up", "down", "out", "off", "away", "back", "over", "in", "on")]
         late = [w for w in late if w not in particles]
         parts = before + [subj] + after + particles + [obj] + late + comps
+        if copula and not obj and not late and not comps and not particles and not subj_gap and not q \
+                and not obj_gap and subj and c.subj.head.base not in ("n1", "n2"):
+            # "X v1" with nothing said about X is existence: "there was a family"
+            # (which is how English "there was" is encoded)
+            parts = before + ["there"] + after + [subj]
         s = " ".join(p for p in parts if p)
         if obj_gap:
             s = f"{ctx.gap_word} {s}"

@@ -458,10 +458,12 @@ def test_lexical_comparatives_get_no_extra_degree():
 
 
 def test_comparatives_read_as_english():
-    for en, want in (("He ran faster.", "faster"), ("She is more beautiful.", "more beautiful"),
-                     ("The bigger dog barked.", "larger"), ("She spoke more carefully.", "more carefully")):
+    # a comparative of the concept, in the word English uses most for it
+    # (beautiful and pretty are one concept in the dictionary; big and large too)
+    for en, want in (("He ran faster.", ("faster",)), ("She is more beautiful.", ("more beautiful", "prettier")),
+                     ("The bigger dog barked.", ("bigger", "larger")), ("She spoke more carefully.", ("more carefully",))):
         e = U.decode("\n".join(U.encode(en)))
-        assert want in e, (en, e)
+        assert any(w in e for w in want), (en, e)
 
 
 def test_clause_after_preposition_is_english():
@@ -624,3 +626,34 @@ def test_public_functions_not_shadowed_by_submodules():
     for name in ("encode", "decode", "humanize", "to_ids", "from_ids", "load"):
         f = getattr(ugl, name)
         assert callable(f) and not isinstance(f, type(ugl)), name
+
+
+# families found by tools/fidelity_report.py (source English vs decoded English)
+FIDELITY_FAMILIES = [
+    # a frequent name numbered for frequency alone may be a person: "his" = Tim
+    ("Tim wanted to play with his toys.", lambda u, e: "Tim's toys" in e),
+    # a question inside quotes is still a question
+    ('"Mom, can I play with my toys?"', lambda u, e: e.startswith("Can I play") and "?" in e),
+    # set phrases: "once upon a time" = once; "one day" has no preposition
+    ("Once upon a time, there was a family.", lambda u, e: e == "Once, there was a family."),
+    ("One day, a dog barked.", lambda u, e: "one day" in e.lower() and "1 day" not in e),
+    ("The next day, Tim went home.", lambda u, e: "the next day" in e and "at the next" not in e),
+    # meaning adverbs are kept
+    ("The astronomers can only see the separation.", lambda u, e: "only see" in e),
+    ("Sam had dirty toys too.", lambda u, e: "also" in e and "excessively" not in e),
+    # a kinship word used as a name is that person
+    ("Mom said hello.", lambda u, e: e.startswith("Mom ") and "'Mom'" in u),
+    # the word English uses most for the concept, among words that mean it first
+    ("Her mom gave her a big hug.", lambda u, e: "mom" in e and "big" in e and "mummy" not in e),
+    ("He started to cry.", lambda u, e: "cry" in e),
+]
+
+
+def test_fidelity_families():
+    fails = []
+    for en, ok in FIDELITY_FAMILIES:
+        u = "\n".join(ENC.encode(en))
+        e = DEC.decode(u)
+        if not ok(u, e):
+            fails.append(f"{en!r} -> {u!r} -> {e!r}")
+    assert not fails, "\n".join(fails)

@@ -14,6 +14,15 @@ from .core import PREFIXES, RESERVED_NOUNS, RESERVED_VERBS, WORD_RE, add_mods
 
 DICT_DIR = os.path.join(os.path.dirname(__file__), "dictionary")
 
+# closed-class English words: never chosen as the surface word of a concept by
+# frequency (their counts are of their grammatical use)
+FUNCTION_WORDS = set("""a an the this that these those and or but nor so yet for if then than as because
+since while though although unless until when where why how what which who whom whose of in on at by to
+from with without about above below under over into onto out up down off through across along around
+between among against during before after near not no yes all any some each every both either neither
+he she it they we you i me him her us them his its their our your my mine one
+be do have will would shall should can could may might must""".split())   # auxiliaries: counted as such
+
 # UGL class -> dictionary index classes searched, in order
 SEARCH = {"n": ["n"], "v": ["v"], "a": ["a", "r"], "r": ["r", "a"]}
 
@@ -103,6 +112,11 @@ class Lexicon:
         ("Simon" yes, "Paris" no); None for names it does not know."""
         s = self.names.get(text) or (self.names.get(text[4:]) if text.lower().startswith("the ") else None)
         if s is None or s not in self.senses_:
+            return None
+        if s.startswith("name:"):
+            # a frequent name numbered for its frequency alone ("Tim", "Max"): the
+            # dictionary has no WordNet sense saying what it names, so it is unknown,
+            # not "not a person" (which would stop "he" / "his" from meaning Tim)
             return None
         return s in self.person
 
@@ -200,16 +214,68 @@ class Lexicon:
         c = "r" if adverb else cls                # an adjective slot needs an adjective
         cands = own.get((c, token), [])
         mine = e["lemma"].replace("_", " ").lower()
-        if any(lemma == mine for _, lemma in cands):
-            return None                           # its own lemma is right
-        # one plain word only: "date stamp the manuscript" reads worse than "date"
-        cands = [x for x in cands if x[1].isalpha()]
-        if not cands:
-            return None
+        mine_ok = any(lemma == mine for _, lemma in cands)    # its own word mostly means it
         if adverb and any(lemma == mine + "ly" or lemma == mine[:-1] + "ily" for _, lemma in cands):
             return None                           # the ordinary -ly form means it: let the caller build it
-        # the commonest word (more senses goes with more use), then the shorter
-        return max(cands, key=lambda x: (x[0], -len(x[1]), x[1]))[1]
+        # one plain word only: "date stamp the manuscript" reads worse than "date"
+        plain = [x for x in cands if x[1].isalpha()]
+        if self.word_freq is not None:
+            # a function word's count is its function-word use ("but" the conjunction,
+            # not "but" = merely): it says nothing about it as a content word
+            plain = [x for x in plain if x[1] not in FUNCTION_WORDS]
+        if mine_ok:
+            plain = [x for x in plain if x[1] != mine] + [(0, mine)]
+        freq = self.word_freq
+        if freq is not None:
+            # the word English uses most for this concept ("big", not "large"; "mom",
+            # not "mummy"), among the words that mean it first, so a reader (and the
+            # encoder) reads the English back as the same concept
+            if not plain:
+                return None
+            best = max(plain, key=lambda x: (self.lemma_freq(x[1], c), x[1] == mine, x[0], -len(x[1])))[1]
+            if not mine_ok and not adverb and \
+                    self.lemma_freq(best, c) < 0.1 * self.lemma_freq(mine, c):
+                # its own word means something else first, but every word that means
+                # this first is rare: "interactive", not "interactional"
+                return None
+        elif not plain or mine_ok:
+            return None
+        else:
+            # no counts: the commonest word (more senses goes with more use), then the shorter
+            best = max(plain, key=lambda x: (x[0], -len(x[1]), x[1]))[1]
+        return None if best == mine else best
+
+    @property
+    def word_freq(self):
+        """English word form -> uses per million (ugl/dictionary/wordfreq.json.gz,
+        tools/build_word_freq.py), or None if the table is not there."""
+        if not hasattr(self, "_word_freq"):
+            path = os.path.join(DICT_DIR, "wordfreq.json.gz")
+            self._word_freq = None
+            if os.path.exists(path):
+                with gzip.open(path, "rt", encoding="utf-8") as f:
+                    self._word_freq = json.load(f)["freq"]
+        return self._word_freq
+
+    @lru_cache(maxsize=None)
+    def lemma_freq(self, lemma, cls):
+        """Uses per million of a lemma in all its forms (dog + dogs; go, went, gone ...).
+        The counts are of word forms, so a form that is also a form of another
+        word of the same class says nothing about this one: "found" is mostly
+        the past of "find", so only "founded", "founding", "founds" count for
+        the verb "found"."""
+        from lemminflect import getAllInflections, getAllLemmas
+        upos = {"n": "NOUN", "v": "VERB", "a": "ADJ", "r": "ADV"}.get(cls)
+        forms = {lemma.lower()}
+        if upos:
+            for fs in getAllInflections(lemma, upos=upos).values():
+                forms.update(f.lower() for f in fs)
+        total = 0.0
+        for f in forms:
+            others = {l.lower() for l in getAllLemmas(f, upos=upos).get(upos, ())} - {lemma.lower()} if upos else set()
+            if not others:
+                total += self.word_freq.get(f, 0.0)
+        return total
 
     def is_person_token(self, token):
         """Does this concept token name a kind of person ("woman", "singer")?"""

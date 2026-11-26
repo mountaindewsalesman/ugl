@@ -153,6 +153,20 @@ def build_tokens(sent):
     return toks
 
 
+KIN_NAMES = {**dict.fromkeys("Mom Mommy Mum Mummy Mama Mamma Momma Ma Grandma Granny Nana Grandmother Mother".split(), "f"),
+             **dict.fromkeys("Dad Daddy Papa Pa Pop Grandpa Grandad Granddad Grandfather Father".split(), "m")}
+
+
+def once_upon_a_time(v, k, own=False):
+    """Is oblique k the "upon a time" of "once upon a time"?  The phrase means
+    "once" (at some time in the past), which the advmod "once" already says;
+    read literally it would be "on a time".  v: the verb k hangs from, or with
+    own=True the word "once" itself (the parser attaches it either way)."""
+    if not (k.lower == "time" and any(c.lower == "upon" for c in k.dep("case"))):
+        return False
+    return v.lower == "once" if own else any(a.lower == "once" for a in v.dep("advmod"))
+
+
 def date_parts(t):
     """If t heads a date ("14 February 2025", "February 14, 2025",
     "February 2025", "14 February"): (literal, tokens).  Else None."""
@@ -544,6 +558,8 @@ class Analyzer:
             elif d == "advmod":
                 self.adverbial(k, ev)
             elif d in ("obl", "obl:tmod", "obl:npmod", "obl:agent") and k is not agent:
+                if once_upon_a_time(v, k):
+                    continue                    # "Once upon a time": the "once" says it all
                 ev.rels.append(self.rel_from_case(k))
             elif d == "advcl" and self.unmarked(k):
                 # "..., observing X": English states no relation (time? cause? manner?),
@@ -623,12 +639,21 @@ class Analyzer:
             ev.rels.append(Rel("time", Entity("lex", w, pos=k.i)))
             return
         for o in k.dep("obl", "nmod", "obl:npmod"):     # "away [from the stock]"
-            ev.rels.append(self.rel_from_case(o))
+            if not once_upon_a_time(k, o, own=True):
+                ev.rels.append(self.rel_from_case(o))
+        if w == "too" and head is not None and head.upos in ("VERB", "AUX"):
+            # "Sam had dirty toys too": also (on an adjective it is excess: "too hot")
+            ev.manner.append(Attr("also", "adj", "", k.i, adverb=True))
+            return
         if w in ("all", "both", "each") and ev.subj is not None and not ev.subj.quant:
             ev.subj.quant = "all"                      # floating quantifier: "the dogs all barked"
             return
-        if w in ("also", "too", "just", "even", "only", "then", "so", "still", "already"):
-            return                                     # discourse particles: no content in UGL v0
+        if w == "so":
+            # "So, Tim went outside": a connective (handled by link()); "so happy" is a
+            # degree word on the adjective (above).  Neither is an adverb of the clause.
+            return
+        # "only", "still", "even", "already", "also", "just", "then" carry meaning
+        # ("can only see" is not "can see"): ordinary adverbs of the clause
         ev.manner.append(self.attr(k))
 
     EMBEDDED = {"ccomp", "xcomp", "advcl", "acl", "acl:relcl", "csubj", "csubj:pass"}
@@ -896,6 +921,12 @@ class Analyzer:
             parts = number_parts(t)
             e = Entity("num", number_literal(t, parts), pos=t.i, parts=[p.i for p in parts])
             self.np_mods(t, e, skip=set(id(p) for p in parts))
+            return e
+        if t.form in KIN_NAMES and not t.dep("det", "nmod:poss"):
+            # "Mom said", "No, Dad": a kinship word used as the person's name means
+            # that one person ("a mom" would be anyone's mother)
+            e = Entity("name", t.form, pos=t.i, is_person=True, animate=True, gender=KIN_NAMES[t.form])
+            self.np_mods(t, e)
             return e
         if t.upos == "PROPN":
             span = name_span(t)
