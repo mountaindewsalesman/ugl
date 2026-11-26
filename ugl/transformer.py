@@ -126,6 +126,17 @@ def use_device(device):
     DEVICE = device
 
 
+def release_gpu_cache(limit=900 * 2 ** 20):
+    """Hand cached-but-unused GPU memory back once this process holds more than
+    `limit` bytes.  PyTorch keeps the memory of its largest batch so far; with
+    several builds sharing one card, that creep overfills it, and Windows then
+    pages GPU memory to system RAM, slowing every build.  Call between documents."""
+    if DEVICE and DEVICE.startswith("cuda"):
+        import torch
+        if torch.cuda.memory_reserved() > limit:
+            torch.cuda.empty_cache()
+
+
 class Transformer:
     """w: dict of float32 arrays named by export_names() with prefix stripped."""
 

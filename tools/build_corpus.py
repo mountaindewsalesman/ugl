@@ -172,8 +172,8 @@ def main():
     ap.add_argument("--keep", type=float, default=0.4,
                     help="grader cut: the share of held-out test sentences it kept (0.4: 87%% right there)")
     a = ap.parse_args()
+    from ugl.transformer import release_gpu_cache, use_device
     if a.device:
-        from ugl.transformer import use_device
         use_device(a.device)
     u = ugl.UGL()
     grader = None
@@ -292,6 +292,7 @@ def main():
                        # byte sizes: a resume trims away anything written after this point
                        "sizes": {os.path.basename(h.name): h.tell() for h in outputs}}, f)
         os.replace(prog + ".tmp", prog)
+        release_gpu_cache()                 # several builds share the card: don't hoard its memory
         if a.max_sents and seen >= a.max_sents:
             break
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "
