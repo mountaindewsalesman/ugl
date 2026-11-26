@@ -219,22 +219,31 @@ def batches(stream, ctx, bs, rng):
 
 
 @torch.no_grad()
-def passage_nll(model, seqs, ctx, device, bs=32):
-    """Total negative log-likelihood (nats) of each passage, predicted from its start."""
+def passage_nll(model, seqs, ctx, device, bs=16):
+    """Total negative log-likelihood (nats) of each passage, predicted from its start.
+    Passages are scored in order of length (little padding) and small batches,
+    so the (batch x positions x vocabulary) table stays small; the cached GPU
+    memory is handed back afterwards, so evaluating doesn't crowd training."""
     model.eval()
-    out = []
-    for i in range(0, len(seqs), bs):
-        part = [s[:ctx + 1] for s in seqs[i:i + bs]]      # (passages longer than ctx: scored to ctx)
+    out = [0.0] * len(seqs)
+    order = sorted(range(len(seqs)), key=lambda k: len(seqs[k]))
+    for i in range(0, len(order), bs):
+        idx = order[i:i + bs]
+        part = [seqs[k][:ctx + 1] for k in idx]          # (passages longer than ctx: scored to ctx)
         T = max(len(s) for s in part)
         x = torch.full((len(part), T), PAD, dtype=torch.long)
         for b, s in enumerate(part):
             x[b, :len(s)] = torch.tensor(s)
         x = x.to(device)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-            logits = model(x[:, :-1]).float()
-        nll = F.cross_entropy(logits.transpose(1, 2), x[:, 1:], ignore_index=PAD, reduction="none").sum(1)
-        out += nll.tolist()
+            logits = model(x[:, :-1])
+        nll = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), x[:, 1:].reshape(-1),
+                              ignore_index=PAD, reduction="none").view(len(part), -1).sum(1)
+        for k, v in zip(idx, nll.tolist()):
+            out[k] = v
     model.train()
+    if device == "cuda":
+        torch.cuda.empty_cache()
     return out
 
 
@@ -307,6 +316,7 @@ def main():
     best = float("inf")
     cfg = {"lang": a.lang, "vocab": vocab, "d": a.d, "layers": a.layers, "heads": a.heads, "ctx": a.ctx}
     t1 = time.time()
+    eval_time = 0.0
     for step in range(1, steps + 1):
         x, y = batches(stream, a.ctx, a.bs, rng)
         x, y = x.to(device), y.to(device)
@@ -324,10 +334,14 @@ def main():
         opt.step()
         sched.step()
         if step % a.eval_every == 0 or step == steps:
+            rate = step * a.bs * a.ctx / (time.time() - t1 - eval_time)      # training only
+            te = time.time()
             bpw = sum(passage_nll(model, seqs["valid"], a.ctx, device)) / math.log(2) / max(1, valid_words)
-            rate = step * a.bs * a.ctx / (time.time() - t1)
+            eval_time += time.time() - te
+            left = (steps - step) * a.bs * a.ctx / rate + eval_time / step * (steps - step)
             say(f"step {step}/{steps}: train loss {loss.item():.3f}; valid {bpw:.3f} bits per English word; "
-                f"{rate / 1e3:.0f}k tokens/s")
+                f"training {rate / 1e3:.0f}k tokens/s, evaluation {time.time() - te:.0f} s; "
+                f"~{left / 60:.0f} min left")
             if bpw < best:
                 best = bpw
                 torch.save({"cfg": cfg, "model": model.state_dict()}, os.path.join(out, "model.pt"))
