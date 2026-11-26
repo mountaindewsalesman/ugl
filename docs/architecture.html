@@ -75,6 +75,7 @@ footer { color: var(--muted); font-size: .85rem; }
   <nav aria-label="Versions">
     <a href="#compare">At a glance</a>
     <a href="#next">In progress</a>
+    <a href="#v040">v0.4.0 · meaning check, story models</a>
     <a href="#v032">v0.3.2 · clean corpus</a>
     <a href="#v031">v0.3.1 · groups and prefixes</a>
     <a href="#v030">v0.3.0 · transformer parser</a>
@@ -107,8 +108,9 @@ footer { color: var(--muted); font-size: .85rem; }
 </section>
 
 <section id="next" class="version">
-  <div class="vhead"><h2>In progress · after v0.3.2</h2><span class="tag">corpus quality</span></div>
-  <p><b>Now (2026-11-25):</b> building the paired corpus with the rule-based filter from six more sources besides Wikipedia (FineWeb-Edu, Simple English Wikipedia, Gutenberg, CC-News, OpenAssistant, TinyStories; <span class="mono">scripts/fetch_sources.py</span>). A hand review of 181 sentences found that 40% of fully clean sentences still had stable errors no filter can see; five of those families are fixed (without-clauses, "over" + time, "than", date headings, names with "of"), and the confidence threshold is down to 0.6 with unknown words allowed, which the grading showed cost nothing. The playground encodes ~12× faster (precomputed sense-gloss table) and shows a progress bar.</p>
+  <div class="vhead"><h2>In progress · after v0.4.0</h2><span class="tag">corpus v3</span></div>
+  <p><b>Now (2026-11-26):</b> rebuilding the corpus (<span class="mono">data/build/corpus-v3</span>) with every v0.4.0 fix and the meaning check as a filter, then training both story models again on it and comparing sentence by sentence. Next families: "where is X", do / make, "from that day on", interjections; and a way to catch wrong-referent pronouns, which the meaning check cannot see.</p>
+  <p><b>Earlier (2026-11-25):</b> building the paired corpus with the rule-based filter from six more sources besides Wikipedia (FineWeb-Edu, Simple English Wikipedia, Gutenberg, CC-News, OpenAssistant, TinyStories; <span class="mono">scripts/fetch_sources.py</span>). A hand review of 181 sentences found that 40% of fully clean sentences still had stable errors no filter can see; five of those families are fixed (without-clauses, "over" + time, "than", date headings, names with "of"), and the confidence threshold is down to 0.6 with unknown words allowed, which the grading showed cost nothing. The playground encodes ~12× faster (precomputed sense-gloss table) and shows a progress bar.</p>
   <p>The large parser finished and now builds the corpus (v0.3.2, below). The aim is to keep every sentence the parser is sure of: today the pipeline keeps about half of them on unseen Wikipedia text. The rest fail the round trip mostly where the decoder's English is ambiguous, or where a sentence uses a construction the analyzer does not handle yet. Next: keep fixing those families against <span class="mono">tools/roundtrip_report.py</span>, checked on held-out text and on hand-annotated trees (<span class="mono">tools/filter_value.py</span>), then build the paired UGL / English corpus for the two-model experiment.</p>
   <p>The plan as it stood during training:</p>
   <div class="chart"><pre class="mermaid">
@@ -139,6 +141,59 @@ flowchart LR
     </tbody>
   </table></div>
   <div class="note"><h3>Design questions</h3><p>All three were decided and built in v0.3.1 (below).</p></div>
+</section>
+
+<section id="v040" class="version">
+  <div class="vhead"><h2>v0.4.0 · meaning check and story models</h2><span class="tag">library 0.4.0</span><span class="tag">dictionary 0.6.0</span><span class="tag">tokenizer scheme 4</span></div>
+  <p>The first two story models were trained on the 46M-word corpus, one in English and one in UGL, on the same passages. English came out slightly ahead. Comparing them sentence by sentence showed where UGL loses: on pronouns, where UGL writes out who is meant. Reading the corpus showed a second problem. Too many kept sentences said something other than their source, because the round trip only checked that the UGL was stable. A meaning check now compares the decoded English with the source, and the families it found are fixed. The corpus is being rebuilt with the check as a filter.</p>
+  <div class="chart"><pre class="mermaid">
+flowchart LR
+  A[English story] --> P[Large + small parser<br>agreement, confidence]
+  P --> E[Analyzer · coref · serializer]
+  E --> R[Round trip<br>UGL → English → UGL]
+  R -- same reading --> M{Meaning check<br>decoded English vs source:<br>nothing lost, changed, added?}
+  M -- yes --> K[(Corpus v3<br>UGL + English)]
+  M -- no --> X[Rejected]
+  R -- changed --> X
+  K --> LU[UGL story model<br>GPT-2 layout, 20M]
+  K --> LE[English story model<br>same size, same passages]
+  LU --> C{Bits per English word<br>per sentence}
+  LE --> C
+  classDef neural fill:#efe6fd,stroke:#7a3fd0,color:#2a1250,stroke-width:2px
+  classDef rules fill:#fbeedd,stroke:#b5650b,color:#4a2a04,stroke-width:2px
+  classDef algo fill:#e2f5f1,stroke:#0f7f6e,color:#073b33,stroke-width:2px
+  classDef data fill:#eceff3,stroke:#5a6577,color:#1c2430,stroke-width:2px
+  class P,LU,LE neural
+  class E rules
+  class R,M,C algo
+  class A,K,X data
+</pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Kind</th><th>What it does now</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td>Meaning check (<span class="mono">ugl/fidelity.py</span>)</td><td class="kind algo">Algorithm</td><td>Content words of the decoded English against the source's, lemmatized. A synonym must mostly mean something the source word can mean. A name or noun from the document standing for a pronoun is expected. Anything lost, changed or added rejects the sentence.</td><td>"He started to cry" → "began to call": rejected (call mostly means name). big → large: kept.</td></tr>
+      <tr><td>Decoder word choice</td><td class="kind algo">Algorithm</td><td>The word English uses most for the concept, among words that mean it first, from <span class="mono">wordfreq.json.gz</span> (38.6M words, half stories, half general text). Forms of other words ("found" = find) and function words do not count. Nouns spelled from their gloss are one word again.</td><td>mummy → mom, large → big, humorous → funny; "young little woman" → "little girl"</td></tr>
+      <tr><td>Back-references (SPEC 15, <span class="mono">ugl/refs.py</span>)</td><td class="kind rules">Rules</td><td><code>@k</code> is the k-th most recently mentioned referent; exact conversion both ways on UGL text alone. In the language, off for training (see below).</td><td><code>'Tom' v_land_p v30 n_back_t @1y \v30</code> = Tom landed on his back</td></tr>
+      <tr><td>Story models (<span class="mono">tools/train_lm.py</span>, <span class="mono">export_lm.py</span>, <span class="mono">ugl/lm.py</span>)</td><td class="kind neural">Neural</td><td>GPT-2 layout, 20M parameters, exported as a standard Hugging Face folder; runs with numpy alone (<code>ugl continue</code>), loads in transformers, converts to GGUF / ONNX</td><td>"Tom found a big red ball in the park." → "He picked it up and started to play with it."</td></tr>
+      <tr><td>Per-sentence comparison (<span class="mono">tools/compare_lm.py</span>)</td><td class="kind algo">Algorithm</td><td>Both models score every test sentence; the gap is split by token type, parser confidence, pronouns, source, length</td><td>Pronoun-free sentences: UGL ahead by 0.084 bits per word</td></tr>
+    </tbody>
+  </table></div>
+  <h3>What changed from v0.3.2, and why</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th>Why</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>First UGL vs English story models</td><td>The experiment the corpus is for</td><td>Test bits per English word: English 3.104, UGL 3.210 (44M words, 20M parameters each). UGL wins on sentences without pronouns (−0.084); the gap grows with each pronoun (+0.19, +0.26, +0.34). The parser's confidence matters little: +0.07 on sure sentences, +0.11–0.16 on the rest.</td></tr>
+      <tr><td>Back-references tried, kept out of training</td><td>Pronouns are where UGL loses: a cheaper way to say "the same one again"</td><td>16% fewer tokens, but worse: 3.292. A transformer copies a repeated name more easily than it ranks referents by recency, and <code>@k</code> still says who is meant, so the information UGL adds stays to be predicted.</td></tr>
+      <tr><td>Meaning check in the corpus filter</td><td>The round trip passed a sentence translated wrongly the same way twice; 31% of kept sentences changed, lost or added a content word</td><td>Same passages, re-encoded: faithful 69% → 80%; sentences with an added word 23% → 8%. TinyStories kept: 58% → 50%, the difference being sentences that did not say what their source said.</td></tr>
+      <tr><td>Encoder families</td><td>Found by the meaning check</td><td>Frequent numbered names (Tim, Max) could not be "he"; quoted questions became statements; "once upon a time", "one day"; only / still / even were dropped since v0; Mom / Dad as names; an unresolved "they" lost its "the" on re-mention</td></tr>
+      <tr><td>Decoder families</td><td>The English read badly though the UGL was right</td><td>Word choice by real usage; gloss-spelled nouns as one word, also on re-mention ("the girl", not "the woman"); "there was X"; "one day" / "the next day" without "at"</td></tr>
+      <tr><td>GPU memory</td><td>Builds and training overfilled the 8 GB card and Windows paged it to system RAM (half speed)</td><td>Builds hand back cached memory between documents; training sums gradients over slices and evaluates in small sorted batches: 2.4 GB, 95k tokens/s (was 28k)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><h3>Known gaps</h3><ul class="tight">
+    <li>The meaning check cannot see a pronoun resolved to the wrong person, or a scrambled structure that keeps the same words</li>
+    <li>"Where is my ball?" → "My ball is where"; do / make share one concept; "from that day on" loses "on"; interjections ("OK.") are read as nouns</li>
+  </ul></div>
 </section>
 
 <section id="v032" class="version">
