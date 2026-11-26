@@ -248,6 +248,10 @@ def main():
     ap.add_argument("--heads", type=int, default=6)
     ap.add_argument("--ctx", type=int, default=256)
     ap.add_argument("--bs", type=int, default=64)
+    ap.add_argument("--micro-bs", type=int, default=16,
+                    help="sequences per forward pass; the batch's gradients are summed over these slices. "
+                         "Same training as one pass of --bs, but the (sequences x positions x vocabulary) "
+                         "output table is a quarter the size: a full one overfills an 8 GB GPU")
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--epochs", type=float, default=3.0, help="passes over the training tokens")
     ap.add_argument("--steps", type=int, default=None, help="overrides --epochs")
@@ -306,10 +310,16 @@ def main():
     for step in range(1, steps + 1):
         x, y = batches(stream, a.ctx, a.bs, rng)
         x, y = x.to(device), y.to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-            loss = F.cross_entropy(model(x).float().view(-1, vocab), y.view(-1), ignore_index=PAD)
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        # the batch in slices: summed token losses / all counted tokens = the full batch's mean loss
+        counted = (y != PAD).sum().clamp(min=1)
+        loss = 0.0
+        for s in range(0, a.bs, a.micro_bs):
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
+                part = F.cross_entropy(model(x[s:s + a.micro_bs]).float().view(-1, vocab),
+                                       y[s:s + a.micro_bs].reshape(-1), ignore_index=PAD, reduction="sum") / counted
+            part.backward()
+            loss = loss + part.detach()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         sched.step()
