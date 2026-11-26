@@ -29,23 +29,7 @@ from collections import Counter
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-CONTENT = {"NOUN", "PROPN", "VERB", "ADJ", "ADV", "NUM"}
-SKIP = {"be", "have", "do", "not", "so", "very", "then", "there", "also", "just", "too", "n't"}
-WN_POS = {"NOUN": "n", "PROPN": "n", "VERB": "v", "ADJ": "a", "ADV": "r"}
-
-
-NUMBERS = {w: str(i) for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve "
-                                            "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
-
-
-def lemma(form, upos):
-    from lemminflect import getLemma
-    if upos == "PROPN":
-        return form
-    if upos == "NUM" or form.lower() in NUMBERS:     # UGL writes numbers as digits: one = 1
-        return NUMBERS.get(form.lower(), form.replace(",", ""))
-    got = getLemma(form, upos=upos if upos != "ADJ" else "ADJ")
-    return (got[0] if got else form).lower()
+from ugl.fidelity import Meaning, content_words, normalize_source  # noqa: E402  (the corpus filter's own check)
 
 
 class Words:
@@ -53,6 +37,8 @@ class Words:
         from ugl.parser.model import ParserModel
         from ugl.parser.tokenize import tokenize
         self.parser, self.tokenize = ParserModel(), tokenize
+        import ugl
+        self.freq = ugl.load(wsd=False).lexicon.word_freq
 
     def __call__(self, text):
         """-> [(lemma, upos)] content words of an English sentence."""
@@ -60,55 +46,7 @@ class Words:
         if not w:
             return []
         st = self.parser.score(w)
-        tree = self.parser.tree(st, self.parser.decode_tree(st["S"]))
-        out = []
-        for t in tree:
-            if t["upos"] in CONTENT:
-                lm = lemma(t["form"], t["upos"])
-                if lm.lower() not in SKIP and any(c.isalnum() for c in lm):
-                    out.append((lm, t["upos"]))
-        return out
-
-
-_syn = {}
-
-
-def synsets(lm, upos):
-    k = (lm.lower(), upos)
-    if k not in _syn:
-        from nltk.corpus import wordnet as wn
-        p = WN_POS.get(upos)
-        _syn[k] = set(wn.synsets(lm.lower().replace(" ", "_"), p)) if p else set()
-    return _syn[k]
-
-
-def similar(a, b):
-    if a[0].lower() == b[0].lower():
-        return True
-    sa, sb = synsets(*a), synsets(*b)
-    return bool(sa & sb)
-
-
-def compare(src, out, context):
-    """-> (matched, changed [(src, out)], lost [src], added [out], referents [out])."""
-    out = list(out)
-    matched, lost = 0, []
-    for s in src:
-        hit = next((k for k, o in enumerate(out) if similar(s, o)), None)
-        if hit is None:
-            lost.append(s)
-        else:
-            matched += 1
-            out.pop(hit)
-    referents = [o for o in out if o[1] in ("PROPN", "NOUN") and o[0].lower() in context]
-    added = [o for o in out if o not in referents]
-    changed = []
-    for s in list(lost):                      # a lost word and an added word of the same kind: a change
-        k = next((i for i, o in enumerate(added) if (o[1] == s[1]) or {o[1], s[1]} <= {"NOUN", "PROPN"}), None)
-        if k is not None:
-            changed.append((s, added.pop(k)))
-            lost.remove(s)
-    return matched, changed, lost, added, referents
+        return content_words(self.parser.tree(st, self.parser.decode_tree(st["S"])), self.freq)
 
 
 def main():
@@ -139,6 +77,7 @@ def main():
                 except ValueError:
                     pass
     words = Words()
+    check = Meaning(u.lexicon)
     rows = []
     for p in picks:
         context_src = " ".join(p["english"])
@@ -158,8 +97,9 @@ def main():
                 d = u.decode(g)
             except Exception as ex:  # noqa: BLE001
                 d = f"<decode failed: {ex}>"
-            src, out = words(e), words(d)
-            m, ch, lo, ad, rf = compare(src, out, ctx_words)
+            src, out = words(normalize_source(e)), words(d)
+            r = check.compare(src, out, ctx_words)
+            m, ch, lo, ad, rf = r["matched"], r["changed"], r["lost"], r["added"], r["referents"]
             rows.append({"source": p.get("source", "?"), "english": e, "decoded": d, "matched": m,
                          "content": len(src), "changed": ch, "lost": lo, "added": ad, "referents": rf})
             if len(rows) >= a.n:

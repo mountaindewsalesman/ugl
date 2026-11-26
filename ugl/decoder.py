@@ -622,6 +622,22 @@ class Decoder:
                 s += "'s"
             return s
         noun = self.lemma(h)
+        adjs = np.adjs
+        if h.kind == "word" and h.cls == "n" and adjs:
+            # a noun the dictionary spells from its gloss ("woman young") is said as
+            # its one word again: "a little girl", not "a young little woman"
+            plain = [a.raw for a in adjs if getattr(a, "kind", None) == "word" and not a.mods]
+            folded = self.lex.compound_word(h.base, plain)
+            if folded:
+                noun, used = folded
+                left = set(used)
+                keep = []
+                for a in adjs:
+                    if getattr(a, "kind", None) == "word" and not a.mods and a.raw in left:
+                        left.discard(a.raw)
+                    else:
+                        keep.append(a)
+                adjs = keep
         plural = "s" in h.mods
         if h.kind == "word" and h.cls == "nv":
             noun = inflect(noun, "VBG")
@@ -629,8 +645,8 @@ class Decoder:
             noun = inflect(noun, "NNS")                  # also words outside the dictionary
         # an adverb in a counted phrase modifies the number: "about 100 degrees"
         noun = self.affix(h, noun)                   # "non-members"
-        lead = [self.mod_text(a) for a in np.adjs if np.nums and self.is_adverb_sense(a)]
-        pre = ([self.mod_text(a) for a in np.adjs if not (np.nums and self.is_adverb_sense(a))]
+        lead = [self.mod_text(a) for a in adjs if np.nums and self.is_adverb_sense(a)]
+        pre = ([self.mod_text(a) for a in adjs if not (np.nums and self.is_adverb_sense(a))]
                + [self.mod_text(c) for c in np.comps])
         nums = [self.count_text(n) for n in np.nums]
         det = ""

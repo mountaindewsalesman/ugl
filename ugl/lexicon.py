@@ -6,6 +6,7 @@ ugl/dictionary/ and is named in ugl/dictionary/default.txt.  Loading needs
 nothing but the standard library.
 """
 import gzip
+import re
 import json
 import os
 from functools import lru_cache
@@ -244,6 +245,31 @@ class Lexicon:
             # no counts: the commonest word (more senses goes with more use), then the shorter
             best = max(plain, key=lambda x: (x[0], -len(x[1]), x[1]))[1]
         return None if best == mine else best
+
+    def compound_word(self, head, adjs):
+        """The one English word for a noun the dictionary spells as a head plus
+        modifiers (girl = woman + young, puppy = dog + young, from its gloss), when
+        `head` (a token) carries those modifiers among `adjs` (plain adjective
+        tokens).  -> (word, the modifier tokens it uses) or None."""
+        if getattr(self, "_compounds", None) is None:
+            comp = {}
+            for lemma, senses in self.index.get("n", {}).items():
+                common = [s for s in senses if s in self.senses_ and not self.is_proper(self.senses_[s]["tokens"][0])]
+                if not common or not lemma.isalpha():
+                    continue
+                toks = self.senses_[common[0]]["tokens"]
+                if len(toks) > 1 and WORD_RE.match(toks[0]) and toks[0][0] == "n" \
+                        and all(re.fullmatch(r"a\d+", t) for t in toks[1:]):
+                    comp.setdefault(toks[0], []).append((frozenset(toks[1:]), lemma))
+            self._compounds = comp
+        have = set(adjs)
+        fits = [(mods, w) for mods, w in self._compounds.get(head, []) if mods <= have]
+        if not fits:
+            return None
+        freq = (lambda w: self.lemma_freq(w, "n")) if self.word_freq is not None else (lambda w: 0)
+        # the most modifiers it accounts for, then the word English uses most
+        mods, word = max(fits, key=lambda f: (len(f[0]), freq(f[1]), -len(f[1])))
+        return word, mods
 
     @property
     def word_freq(self):

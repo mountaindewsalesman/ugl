@@ -41,11 +41,16 @@ class Serializer:
         if e.kind == "lex":
             # the sense was chosen where the entity was introduced (maybe in an
             # earlier sentence, whose words are no longer the context)
-            head = e.head or self.word(e.lemma, "v" if e.cls == "nv" else "n")[0]
+            if e.head:
+                head, spelling = e.head, e.spelling
+            else:
+                toks = self.word(e.lemma, "v" if e.cls == "nv" else "n")
+                head, spelling = toks[0], toks[1:]
             m = WORD.match(head)
             if m:
                 cls = "nv" if e.cls == "nv" else m.group(1)
-                return [tok(cls, m.group(2), "t" + ("s" if e.plural else ""))]
+                # the whole word: "she" = the girl (n_woman_t a_young), not the woman
+                return [tok(cls, m.group(2), "t" + ("s" if e.plural else ""))] + list(spelling)
             return [head]
         if e.kind == "name":
             return self.proper(e.lemma, "s" if e.plural else "")[:1]
@@ -98,6 +103,7 @@ class Serializer:
                 toks[0] = "nv" + toks[0][1:]
             head = toks
             e.head = toks[0]
+            e.spelling = list(toks[1:])
         out = list(head)
         for a in sorted(e.attrs, key=self.attr_rank):
             out += self.attr(a)

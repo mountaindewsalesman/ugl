@@ -147,6 +147,10 @@ class ParserModel:
                 continue                          # read in parts by layer_states itself
             seen.add(key)
             todo.append((key, ids, first))
+        if not todo:
+            # everything is cached already (a per-sentence call after a document's
+            # batch): evicting now would throw that batch away
+            return
         # room for this batch plus a few recent sentences; older entries go first
         self.cache_size = len(todo) + 64
         for c in (self.cache, self.scores):

@@ -67,19 +67,22 @@ class UGL:
             lines = compress(flat, self.lexicon.is_proper)
         return lines
 
-    def encode_lines(self, text, topic=None, roundtrip=False):
+    def encode_lines(self, text, topic=None, roundtrip=False, meaning=True):
         """-> list of Line(ugl, source, issues, spans): each UGL line with the
         English sentence it came from and anything the encoder is unsure of.
         topic: what the text is about (e.g. an article title), for pronouns.
         roundtrip: also decode each sentence's UGL to English, encode that
-        again, and flag the sentence if the UGL changes (costs a second parse)."""
+        again, and flag the sentence if the UGL changes (costs a second parse).
+        meaning (with roundtrip): also flag it if the decoded English lost,
+        changed or added content words against the source (ugl/fidelity.py)."""
         lines = self.encoder.encode_lines(text, topic)
         if roundtrip:
-            lines = self._roundtrip(lines)
+            lines = self._roundtrip(lines, meaning)
         return lines
 
-    def _roundtrip(self, lines):
+    def _roundtrip(self, lines, meaning=True):
         from .encoder import Line
+        from .fidelity import Meaning, content_words, normalize_source
         groups = {}
         for l in lines:
             groups.setdefault(l.source, []).append(l)
@@ -89,8 +92,16 @@ class UGL:
                 decoded[src] = self.decode("\n".join(l.ugl for l in ls))
             except Exception as e:
                 bad[src] = f"round trip failed: {type(e).__name__}"
-        # every re-parse of the document in one batch (with a GPU; no-op otherwise)
-        self.encoder.prefetch(list(decoded.values()))
+        # every re-parse of the document in one batch (with a GPU; no-op otherwise):
+        # the decoded English, and the sources again for the meaning check
+        sources = {s: normalize_source(s) for s in groups} if meaning else {}
+        self.encoder.prefetch(list(decoded.values()) + list(sources.values()))
+
+        def words(text):
+            return [w for _, tree, *_ in self.encoder.parse(text) for w in content_words(tree, self.lexicon.word_freq)]
+        src_words = {s: words(t) for s, t in sources.items()}
+        context = {w.lower() for ws in src_words.values() for w, _ in ws}
+        check = Meaning(self.lexicon) if meaning else None
         for src, ls in groups.items():
             if src not in decoded:
                 continue
@@ -102,6 +113,10 @@ class UGL:
                 continue
             if not self.same_reading(ugl, again):
                 bad[src] = f"round trip changed the UGL (decoded as: {english})"
+            elif check is not None:
+                flag = check.issue(check.compare(src_words[src], words(english), context))
+                if flag:
+                    bad[src] = f"{flag} (decoded as: {english})"
         return [Line(l.ugl, l.source, l.issues + ((bad[l.source],) if l.source in bad else ()), l.spans)
                 for l in lines]
 
@@ -122,7 +137,8 @@ class UGL:
             if not (mx and my) or mx.group(1) != my.group(1) or mx.group(3) != my.group(3):
                 return False
             cls = "v" if mx.group(1) == "nv" else mx.group(1)
-            word = self.lexicon.lemma_of(cls, mx.group(2))
+            # the word the decoder wrote for the concept (lexicon.surface), else its lemma
+            word = self.lexicon.surface(cls, mx.group(2)) or self.lexicon.lemma_of(cls, mx.group(2))
             meanings = {self.lexicon.senses_[s]["tokens"][0] for s in self.lexicon.senses(word, cls)}
             if f"{cls}{my.group(2)}" not in meanings:
                 return False

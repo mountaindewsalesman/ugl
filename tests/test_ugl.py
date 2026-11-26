@@ -657,3 +657,21 @@ def test_fidelity_families():
         if not ok(u, e):
             fails.append(f"{en!r} -> {u!r} -> {e!r}")
     assert not fails, "\n".join(fails)
+
+
+def test_gloss_spelled_nouns_said_as_one_word():
+    # girl = n_woman a_young (from its gloss): decoded as "girl" again, and a
+    # pronoun for her repeats the whole spelling (not "the woman")
+    e = U.decode("\n".join(U.encode("Once there was a little girl. She had a puppy.")))
+    assert "little girl" in e and "The girl had a puppy" in e and "woman" not in e, e
+
+
+def test_meaning_check_flags_changed_content():
+    from ugl.fidelity import Meaning
+    m = Meaning(U.lexicon)
+    r = m.compare([("cry", "VERB")], [("call", "VERB")], set())
+    assert r["changed"] and Meaning.issue(r)
+    r = m.compare([("big", "ADJ"), ("dog", "NOUN")], [("large", "ADJ"), ("dog", "NOUN")], set())
+    assert Meaning.issue(r) is None                       # a synonym is no change
+    r = m.compare([("see", "VERB")], [("Tom", "PROPN"), ("see", "VERB")], {"tom"})
+    assert Meaning.issue(r) is None                       # the referent of a pronoun

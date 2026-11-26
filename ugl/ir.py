@@ -65,6 +65,8 @@ class Entity:
                                                      # entity (multiword lemma, name, number words)
     head: Optional[str] = None      # set by the serializer: the head token chosen at the first
                                     # mention, so every re-mention names the same sense
+    spelling: List[str] = field(default_factory=list)   # set with head: the word's other tokens
+                                    # when the dictionary spells it from its gloss (girl = woman + young)
 
     def root(self):
         e = self
