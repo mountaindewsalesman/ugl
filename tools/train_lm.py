@@ -64,6 +64,19 @@ def split_of(p):
     return "test" if h < 3 else "valid" if h < 5 else "train"
 
 
+def capped(train, words):
+    """The training passages in a fixed order (by a hash independent of the split's)
+    until `words` English words; then back in corpus order."""
+    key = lambda p: hashlib.md5(("train\n" + "\n".join(p["english"])).encode("utf-8")).hexdigest()
+    keep, n = set(), 0
+    for i in sorted(range(len(train)), key=lambda i: key(train[i])):
+        if n >= words:
+            break
+        keep.add(i)
+        n += english_words(train[i])
+    return [p for i, p in enumerate(train) if i in keep]
+
+
 def english_words(p):
     return sum(len(s.split()) for s in p["english"])
 
@@ -288,6 +301,10 @@ def main():
                          "on 44M words (20M-parameter model) they cost 0.08 bits per English word against "
                          "full names (3.292 vs 3.210), although 16%% shorter; a transformer copies a "
                          "repeated name more easily than it ranks referents by recency")
+    ap.add_argument("--train-words", type=int, default=None,
+                    help="train on only this many English words (a fixed hash-ordered subset of the "
+                         "training passages, the same for both languages), so corpora of different "
+                         "sizes give comparable models")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "data", "build", "lm", a.lang)
     os.makedirs(out, exist_ok=True)
@@ -306,6 +323,8 @@ def main():
     data = {"train": [], "valid": [], "test": []}
     for p in passages(a.corpus):
         data[split_of(p)].append(p)
+    if a.train_words:
+        data["train"] = capped(data["train"], a.train_words)
     say(f"passages: {', '.join(f'{k} {len(v)}' for k, v in data.items())}; "
         f"English words in train {sum(english_words(p) for p in data['train']):,}")
     # the vocabulary size comes from the UGL side either way, so both models match

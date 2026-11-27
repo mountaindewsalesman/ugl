@@ -91,8 +91,22 @@ def document_units(files):
         source = os.path.basename(os.path.dirname(os.path.abspath(path)))
         for title, text in documents([path]):
             paras = [p for p in paragraphs(text) if len(p) >= 40 or re.search(r"[.!?][\"'”’)]*$", p)]
-            if paras:
-                yield source, title, paras
+            # a document is encoded in one piece (pronouns refer across paragraphs),
+            # so a whole Gutenberg book took 5 GB of memory and most of the GPU and
+            # starved the other builds; long ones go in pieces of whole paragraphs
+            unit, size = [], 0
+            for p in paras:
+                if unit and size + len(p) > MAX_UNIT_CHARS:
+                    yield source, title, unit
+                    unit, size = [], 0
+                unit.append(p)
+                size += len(p) + 1
+            if unit:
+                yield source, title, unit
+
+
+# longest piece of a document encoded at once; TinyStories and most web pages fit whole
+MAX_UNIT_CHARS = 20000
 
 
 def _lines(path):
