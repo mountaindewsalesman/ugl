@@ -37,6 +37,12 @@ def strip_asides(text):
 # sentences still hold a wrong head; at 0.9, 2.1% (build_corpus.py uses 0.9).
 UNSURE = 0.8
 
+# longer sentences are flagged and skip the uncertainty check.  The parser's
+# treebanks hold 12 of 35k training sentences over 100 words, so beyond that it
+# guesses; and the check reparses (O(n^3)) once per unsure word, which for a
+# 600-word list sentence ("She puts some water, some flour, ...") takes hours.
+MAX_WORDS = 100
+
 
 def name_internal(t, tree):
     """A link inside a multiword name ("Biju Janata Dal"): UGL writes the name
@@ -164,6 +170,8 @@ class Encoder:
         meaning ("the" attached to either of two nouns that end up the same)
         is not an issue."""
         out, base = [], None
+        if len(words) > MAX_WORDS:
+            return [f"sentence too long: {len(words)} words (over {MAX_WORDS}) to check its grammar"]
         for i, t in enumerate(tree):
             if t.get("conf", 1.0) >= self.unsure or t["upos"] == "PUNCT" or name_internal(t, tree):
                 continue

@@ -69,7 +69,7 @@ KIND = [("uncertain grammar", "uncertain parse"), ("refers to nothing", "unresol
         ("not in the dictionary", "unknown word"), ("no clear grammatical role", "unattached word"),
         ("was dropped", "dropped content word"), ("parsers disagree", "parsers disagree"), ("round trip", "round trip unstable"),
         ("not in the relation table", "unknown preposition"), ("does not parse back", "undecodable"),
-        ("not a sentence", "fragment"),
+        ("not a sentence", "fragment"), ("too long", "too long"),
         ("failed", "crash")]
 
 
@@ -79,7 +79,7 @@ def kind(issue):
 
 # issues that mean a piece of the sentence is missing or broken: rejected even
 # when the grader is used (hand grading: ~21% / ~15% usable)
-HARD = {"dropped content word", "fragment", "crash", "undecodable", "unattached word", "unknown preposition", "other"}
+HARD = {"dropped content word", "fragment", "too long", "crash", "undecodable", "unattached word", "unknown preposition", "other"}
 
 
 def document_units(files):

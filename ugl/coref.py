@@ -146,7 +146,12 @@ def pick(p, role, sno, csubj, seen, topic=None):
     w = p.lemma
     if w in REFLEXIVE and csubj is not None and csubj is not p:
         return csubj.root() if csubj.kind != "pronoun" else csubj
-    recent = [s for s in seen if sno - s[2] <= WINDOW]
+    # never the pronoun's own chain: in "After familiarizing themselves ..., they
+    # developed" the reflexive comes first and points at the later "they", which is
+    # then among the mentions seen; "they" referring to itself would make a cycle
+    recent = [s for s in seen if sno - s[2] <= WINDOW and s[0].root() is not p]
+    if topic is not None and topic.root() is p:
+        topic = None
     if w in PERSONAL:     # a name may be a person unless the dictionary knows it is not (Paris)
         g = "m" if w in MALE_PRONOUNS else "f"
         ok = lambda e: ((e.kind == "name" and e.animate is not False) or e.is_person) \

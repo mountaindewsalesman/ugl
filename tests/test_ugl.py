@@ -675,3 +675,22 @@ def test_meaning_check_flags_changed_content():
     assert Meaning.issue(r) is None                       # a synonym is no change
     r = m.compare([("see", "VERB")], [("Tom", "PROPN"), ("see", "VERB")], {"tom"})
     assert Meaning.issue(r) is None                       # the referent of a pronoun
+
+
+def test_reflexive_before_its_subject_does_not_loop():
+    # "themselves" comes before the "they" it refers to; "they" must not then pick
+    # its own chain (a reference cycle made Entity.root() spin forever)
+    for s in ("After familiarizing themselves with the data, they developed a system.",
+              "Having hurt himself, he went home.",
+              "To protect themselves, the children and they hid."):
+        lines = U.encode_lines(s, roundtrip=False)
+        assert lines, s
+
+
+def test_overlong_sentence_flagged_without_full_check():
+    import time
+    s = "She puts " + ", ".join(f"some {w}" for w in ["water", "flour", "sugar", "salt", "milk"] * 25) + " in the bowl."
+    t = time.time()
+    lines = U.encode_lines(s, roundtrip=False)
+    assert time.time() - t < 30
+    assert any("too long" in i for l in lines for i in l.issues)
