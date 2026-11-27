@@ -309,6 +309,16 @@ def main():
         release_gpu_cache()                 # several builds share the card: don't hoard its memory
         if a.max_sents and seen >= a.max_sents:
             break
+    for h in outputs:
+        h.close()
+    # every document read: say so (tools/resume_builds.py then never resumes it)
+    run_path = os.path.join(a.out, "run.json")
+    with open(run_path, encoding="utf-8") as f:
+        run = json.load(f)
+    run["finished"] = time.time()
+    with open(run_path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(run, f, indent=1)
+    os.replace(run_path + ".tmp", run_path)
     print(f"{seen} English sentences: {kept} kept ({kept / max(1, seen):.1%}), {seen - kept} rejected; "
           f"{passages} passages ({kept / max(1, passages):.1f} sentences each)")
     for k, n in why.most_common():

@@ -15,6 +15,7 @@ crash).  The script removes itself once every build has finished.
 """
 import argparse
 import json
+import re
 import os
 import subprocess
 import time
@@ -27,6 +28,12 @@ PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
 STARTUP = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs",
                        "Startup", "ugl-resume-corpus.cmd")
 DETACHED = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED_PROCESS | NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+
+
+def out_folder(command):
+    """The --out folder of a build_corpus command line (relative to the repo), or None."""
+    m = re.search(r'--out\s+("([^"]+)"|(\S+))', command)
+    return None if not m else os.path.join(ROOT, m.group(2) or m.group(3))
 
 
 def running_commands():
@@ -66,6 +73,12 @@ def state(folder):
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             run = json.load(f)
         done = read_progress(os.path.join(d, "progress.json"))
+        if run.get("finished"):
+            # finished builds say so: counting their documents again would give a
+            # different total whenever document_units changes (long documents now
+            # go in pieces), and the build would be resumed and write a tail twice
+            out.append((name, run["files"], done, done))
+            continue
         out.append((name, run["files"], done, total_documents(run["files"])))
     return out
 
@@ -109,8 +122,11 @@ def check(a):
     builds = state(folder)
     procs = running_commands()
     unfinished = [b for b in builds if b[2] < b[3]]
-    live = {name for name, *_ in builds
-            if any(os.path.join(folder, name) in c or f"\\{name}" in c for c in procs if "build_corpus" in c)}
+    # by the exact --out folder: a name test ("tinystories-8000" in the command line)
+    # took a running tinystories-8000-b for tinystories-8000, which then never resumed
+    outs = {os.path.normcase(os.path.abspath(m)) for c in procs if "build_corpus" in c
+            for m in [out_folder(c)] if m}
+    live = {name for name, *_ in builds if os.path.normcase(os.path.join(folder, name)) in outs}
     slots = (a.max - len(live)) if a.max else len(builds)
     print(time.strftime("%H:%M"), flush=True)
     # TinyStories first when a slot opens: the corpus is meant to be mostly stories

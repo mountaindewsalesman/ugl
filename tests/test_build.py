@@ -23,3 +23,24 @@ def test_long_document_encoded_in_paragraph_pieces(tmp_path):
     assert len(pieces) > 1
     assert all(sum(len(p) + 1 for p in u[2]) <= build_corpus.MAX_UNIT_CHARS + 1 for u in pieces)
     assert sum(len(u[2]) for u in pieces) == 100                      # no paragraph lost or cut
+
+
+def test_scheduler_matches_build_by_exact_folder():
+    import resume_builds as r
+    c = r"C:\x\python.exe tools/build_corpus.py a.jsonl --out C:\d\corpus\tinystories-8000-b --resume --device cuda"
+    assert r.out_folder(c) == r"C:\d\corpus\tinystories-8000-b"
+    assert os.path.normcase(r.out_folder(c)) != os.path.normcase(r"C:\d\corpus\tinystories-8000")
+    assert r.out_folder(r'python tools/build_corpus.py x --out "C:\a b\c"') == r"C:\a b\c"
+
+
+def test_finished_build_not_resumed_when_document_count_changes(tmp_path):
+    # a finished build says so in run.json; recounting its documents (now split
+    # into pieces) must not make the scheduler resume it and write a tail twice
+    import resume_builds as r
+    b = tmp_path / "corpus" / "done"
+    b.mkdir(parents=True)
+    src = _jsonl(tmp_path, ["A dog ran. " * 3000])          # one document, now several pieces
+    (b / "run.json").write_text(json.dumps({"files": [src], "finished": 1.0}), encoding="utf-8")
+    (b / "progress.json").write_text(json.dumps({"docs": 1}), encoding="utf-8")
+    [(name, _, done, total)] = r.state(str(tmp_path / "corpus"))
+    assert (name, done, total) == ("done", 1, 1)
